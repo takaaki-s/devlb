@@ -2,8 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/devlb/internal/config"
@@ -39,8 +42,23 @@ var daemonCmd = &cobra.Command{
 			return fmt.Errorf("failed to create server: %w", err)
 		}
 
-		fmt.Println("devlb daemon started")
-		return srv.Start()
+		// Signal handling for graceful shutdown
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- srv.Start()
+		}()
+
+		select {
+		case sig := <-sigCh:
+			log.Printf("received %s, draining connections...", sig)
+			srv.StopGraceful(daemon.DefaultDrainTimeout)
+			return nil
+		case err := <-errCh:
+			return err
+		}
 	},
 }
 

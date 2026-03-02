@@ -15,6 +15,16 @@ var switchCmd = &cobra.Command{
 With one argument, switches all ports.
 With two arguments, switches only the specified listen port.`,
 	Args: cobra.RangeArgs(1, 2),
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		switch len(args) {
+		case 0:
+			return append(getListenPorts(), getLabels()...), cobra.ShellCompDirectiveNoFileComp
+		case 1:
+			return getLabels(), cobra.ShellCompDirectiveNoFileComp
+		default:
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := daemon.NewClient(getSocketPath())
 		if !client.IsRunning() {

@@ -349,6 +349,215 @@ func TestSwitchUnknownLabelError(t *testing.T) {
 	}
 }
 
+func TestStartPortConflictBlocked(t *testing.T) {
+	// Start a listener on a port
+	sl1 := NewServiceListener("first", 0)
+	if err := sl1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl1.Stop()
+
+	port := portFromAddr(t, sl1.Addr())
+
+	// Try to start a second listener on the same port
+	sl2 := NewServiceListener("second", port)
+	err := sl2.Start()
+	if err == nil {
+		sl2.Stop()
+		t.Fatal("expected Start to fail on occupied port")
+	}
+
+	if !sl2.IsBlocked() {
+		t.Error("expected listener to be blocked")
+	}
+
+	info := sl2.Info()
+	if !info.Blocked {
+		t.Error("expected Info().Blocked to be true")
+	}
+}
+
+func TestHandleConnBackendDown(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	// Set backend to a port where nothing is listening
+	sl.SetBackend(59999, "dead-backend")
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect to proxy — should be closed promptly
+	conn, err := net.DialTimeout("tcp", sl.Addr(), time.Second)
+	if err != nil {
+		return // Connection refused is also acceptable
+	}
+	defer conn.Close()
+
+	buf := make([]byte, 1)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = conn.Read(buf)
+	if err == nil {
+		t.Error("expected connection to be closed when backend is down")
+	}
+}
+
+func TestStopGracefulDrain(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a slow response
+		time.Sleep(500 * time.Millisecond)
+		fmt.Fprint(w, "done")
+	}))
+	defer backend.Close()
+
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	sl.SetBackend(portFromAddr(t, backend.Listener.Addr().String()), "slow")
+	time.Sleep(50 * time.Millisecond)
+
+	// Start a slow request in background
+	done := make(chan string, 1)
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	go func() {
+		resp, err := client.Get("http://" + sl.Addr())
+		if err != nil {
+			done <- "error"
+			return
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		done <- string(body)
+	}()
+
+	// Wait for connection to be established
+	time.Sleep(100 * time.Millisecond)
+
+	// Graceful stop with 2s timeout — should wait for the slow request
+	sl.StopGraceful(2 * time.Second)
+
+	result := <-done
+	if result != "done" {
+		t.Errorf("expected request to complete during drain, got %q", result)
+	}
+}
+
+func TestStopGracefulTimeout(t *testing.T) {
+	// Create a backend that never responds
+	backendLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backendLn.Close()
+
+	// Accept but never respond
+	go func() {
+		for {
+			conn, err := backendLn.Accept()
+			if err != nil {
+				return
+			}
+			// Hold connection open, never write
+			_ = conn
+		}
+	}()
+
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	sl.SetBackend(portFromAddr(t, backendLn.Addr().String()), "hanging")
+	time.Sleep(50 * time.Millisecond)
+
+	// Connect a client
+	conn, err := net.DialTimeout("tcp", sl.Addr(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	// Write some data to ensure Bridge is established
+	conn.Write([]byte("GET / HTTP/1.0\r\n\r\n"))
+	time.Sleep(100 * time.Millisecond)
+
+	// Graceful stop with short timeout
+	start := time.Now()
+	sl.StopGraceful(200 * time.Millisecond)
+	elapsed := time.Since(start)
+
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("StopGraceful took %v, expected ~200ms timeout", elapsed)
+	}
+}
+
+func TestStopGracefulNoConnections(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	sl.StopGraceful(5 * time.Second)
+	elapsed := time.Since(start)
+
+	if elapsed > 200*time.Millisecond {
+		t.Errorf("StopGraceful with no connections took %v, expected immediate return", elapsed)
+	}
+}
+
+func TestHandleConnBackendRecovers(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	// Allocate a port for backend
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPort := portFromAddr(t, ln.Addr().String())
+	ln.Close() // Close so the port is free but nothing listens
+
+	sl.SetBackend(backendPort, "recovering")
+	time.Sleep(50 * time.Millisecond)
+
+	// First connection should fail (backend not listening)
+	conn1, err := net.DialTimeout("tcp", sl.Addr(), time.Second)
+	if err == nil {
+		buf := make([]byte, 1)
+		_ = conn1.SetReadDeadline(time.Now().Add(time.Second))
+		conn1.Read(buf)
+		conn1.Close()
+	}
+
+	// Start a real backend
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "recovered")
+	}))
+	defer backend.Close()
+
+	sl.SetBackend(portFromAddr(t, backend.Listener.Addr().String()), "alive")
+	time.Sleep(50 * time.Millisecond)
+
+	// Second connection should succeed
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatalf("expected recovery to work: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "recovered" {
+		t.Errorf("expected 'recovered', got %q", body)
+	}
+}
+
 func portFromAddr(t *testing.T, addr string) int {
 	t.Helper()
 	parts := strings.Split(addr, ":")

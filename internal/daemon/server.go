@@ -7,10 +7,15 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/takaaki-s/devlb/internal/config"
 	"github.com/takaaki-s/devlb/internal/proxy"
 )
+
+// DefaultDrainTimeout is the maximum time to wait for active connections to
+// drain during graceful shutdown.
+const DefaultDrainTimeout = 10 * time.Second
 
 type Server struct {
 	socketPath string
@@ -70,6 +75,14 @@ func (s *Server) Start() error {
 		}
 	}
 
+	// Clean stale PIDs before restoring Phase 2 backends
+	if n := s.state.CleanStalePIDs(); n > 0 {
+		log.Printf("cleaned %d stale backend entries", n)
+		if err := s.state.Save(); err != nil {
+			log.Printf("failed to save cleaned state: %v", err)
+		}
+	}
+
 	// Restore backends from state (Phase 2)
 	for listenPort, backends := range s.state.GetAllBackends() {
 		sl := s.getOrCreateListener(listenPort)
@@ -83,6 +96,9 @@ func (s *Server) Start() error {
 			}
 		}
 	}
+
+	// Start periodic PID sweeper
+	s.startPIDSweeper(30 * time.Second)
 
 	// Remove existing socket file
 	os.Remove(s.socketPath)
@@ -109,6 +125,12 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() {
+	s.StopGraceful(0)
+}
+
+// StopGraceful stops the server, draining active connections up to the given timeout.
+// If timeout is 0, connections are closed immediately.
+func (s *Server) StopGraceful(timeout time.Duration) {
 	select {
 	case <-s.done:
 		return
@@ -120,29 +142,42 @@ func (s *Server) Stop() {
 		s.listener.Close()
 	}
 
+	// Drain all listeners in parallel
+	var wg sync.WaitGroup
+	stopped := make(map[*proxy.ServiceListener]bool)
+
 	for _, sl := range s.listeners {
-		sl.Stop()
+		stopped[sl] = true
+		wg.Add(1)
+		go func(sl *proxy.ServiceListener) {
+			defer wg.Done()
+			if timeout > 0 {
+				sl.StopGraceful(timeout)
+			} else {
+				sl.Stop()
+			}
+		}(sl)
 	}
 
-	// Stop dynamic listeners not in config
 	s.mu.Lock()
-	for port, sl := range s.portMap {
-		if _, ok := s.listeners[s.serviceNameForPort(port)]; !ok {
-			sl.Stop()
+	for _, sl := range s.portMap {
+		if !stopped[sl] {
+			stopped[sl] = true
+			wg.Add(1)
+			go func(sl *proxy.ServiceListener) {
+				defer wg.Done()
+				if timeout > 0 {
+					sl.StopGraceful(timeout)
+				} else {
+					sl.Stop()
+				}
+			}(sl)
 		}
 	}
 	s.mu.Unlock()
 
+	wg.Wait()
 	os.Remove(s.socketPath)
-}
-
-func (s *Server) serviceNameForPort(port int) string {
-	for _, svc := range s.config.Services {
-		if svc.Port == port {
-			return svc.Name
-		}
-	}
-	return ""
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -165,7 +200,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	case ActionStop:
 		resp = Response{Success: true}
 		_ = json.NewEncoder(conn).Encode(resp)
-		s.Stop()
+		go s.StopGraceful(DefaultDrainTimeout)
 		return
 	case ActionRegister:
 		resp = s.handleRegister(req.Data)
@@ -369,7 +404,9 @@ func (s *Server) handleStatus() Response {
 		if info.BackendPort > 0 {
 			status = "active"
 		}
-		if !info.Listening {
+		if info.Blocked {
+			status = "blocked"
+		} else if !info.Listening {
 			status = "stopped"
 		}
 
@@ -392,11 +429,41 @@ func (s *Server) handleStatus() Response {
 			Status:      status,
 			ActiveConns: info.ActiveConns,
 			Backends:    backendInfos,
+			BlockedBy:   info.BlockedBy,
 		})
 	}
 
 	respData, _ := json.Marshal(StatusResponse{Entries: result})
 	return Response{Success: true, Data: respData}
+}
+
+func (s *Server) startPIDSweeper(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	go func() {
+		for {
+			select {
+			case <-s.done:
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				if n := s.state.CleanStalePIDs(); n > 0 {
+					log.Printf("periodic sweep: cleaned %d stale entries", n)
+					// Also remove from in-memory listeners
+					s.mu.Lock()
+					for port, sl := range s.portMap {
+						for _, b := range sl.Backends() {
+							if b.PID > 0 && !config.IsProcessAlive(b.PID) {
+								sl.RemoveBackend(b.Port)
+								log.Printf("removed stale backend :%d→:%d from listener", port, b.Port)
+							}
+						}
+					}
+					s.mu.Unlock()
+					_ = s.state.Save()
+				}
+			}
+		}
+	}()
 }
 
 // getOrCreateListener returns a listener for the given port, creating one dynamically if needed.

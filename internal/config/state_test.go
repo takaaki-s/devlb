@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -337,5 +338,96 @@ func TestAllocatePort(t *testing.T) {
 	// Ports should be different (highly likely with ephemeral ports)
 	if port1 == port2 {
 		t.Logf("warning: two allocations returned same port %d (unlikely but possible)", port1)
+	}
+}
+
+func TestCleanStalePIDs(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a backend with a guaranteed-dead PID
+	sm.AddBackend(3000, 3001, "stale", 99999999)
+
+	removed := sm.CleanStalePIDs()
+	if removed != 1 {
+		t.Errorf("expected 1 removed, got %d", removed)
+	}
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 0 {
+		t.Errorf("expected 0 backends after cleanup, got %d", len(backends))
+	}
+}
+
+func TestCleanStalePIDsKeepsLive(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a backend with our own PID (definitely alive)
+	sm.AddBackend(3000, 3001, "live", os.Getpid())
+
+	removed := sm.CleanStalePIDs()
+	if removed != 0 {
+		t.Errorf("expected 0 removed, got %d", removed)
+	}
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Errorf("expected 1 backend kept, got %d", len(backends))
+	}
+}
+
+func TestCleanStalePIDsZeroPIDKept(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// PID=0 means manual route — should NOT be cleaned
+	sm.AddBackend(3000, 3001, "manual", 0)
+
+	removed := sm.CleanStalePIDs()
+	if removed != 0 {
+		t.Errorf("expected 0 removed for PID=0, got %d", removed)
+	}
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Errorf("expected 1 backend kept, got %d", len(backends))
+	}
+}
+
+func TestCleanStalePIDsPromotesActive(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First backend (active) has a dead PID, second has PID=0 (manual)
+	sm.AddBackend(3000, 3001, "stale-active", 99999999)
+	sm.AddBackend(3000, 3002, "manual", 0)
+
+	removed := sm.CleanStalePIDs()
+	if removed != 1 {
+		t.Errorf("expected 1 removed, got %d", removed)
+	}
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if !backends[0].Active {
+		t.Error("remaining backend should be promoted to active")
+	}
+	if backends[0].Label != "manual" {
+		t.Errorf("expected remaining to be 'manual', got %q", backends[0].Label)
 	}
 }

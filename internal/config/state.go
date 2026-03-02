@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -232,6 +234,55 @@ func (m *StateManager) GetAllBackends() map[int][]*BackendEntry {
 		result[port] = copied
 	}
 	return result
+}
+
+// CleanStalePIDs removes backend entries with PID > 0 where the process no longer exists.
+// Returns the number of entries removed.
+func (m *StateManager) CleanStalePIDs() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	removed := 0
+	for listenPort, backends := range m.state.Backends {
+		var live []*BackendEntry
+		for _, b := range backends {
+			if b.PID > 0 && !IsProcessAlive(b.PID) {
+				removed++
+				log.Printf("removing stale backend :%d→:%d (PID %d no longer exists)",
+					listenPort, b.BackendPort, b.PID)
+				continue
+			}
+			live = append(live, b)
+		}
+
+		if len(live) == 0 {
+			delete(m.state.Backends, listenPort)
+		} else {
+			m.state.Backends[listenPort] = live
+			// Re-promote if active was removed
+			hasActive := false
+			for _, b := range live {
+				if b.Active {
+					hasActive = true
+					break
+				}
+			}
+			if !hasActive {
+				live[0].Active = true
+			}
+		}
+	}
+	return removed
+}
+
+// IsProcessAlive checks if a PID is still running via signal 0.
+func IsProcessAlive(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return err == nil
 }
 
 // AllocatePort finds an available ephemeral port by temporarily binding to :0.

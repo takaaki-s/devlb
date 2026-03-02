@@ -23,6 +23,12 @@ Examples:
   devlb exec 3000,8995 -- my-server
   devlb exec 3000:3001,8995:8996 -- my-server`,
 	Args: cobra.MinimumNArgs(2),
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 0 {
+			return getListenPorts(), cobra.ShellCompDirectiveNoFileComp
+		}
+		return nil, cobra.ShellCompDirectiveDefault
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		listenPorts, backendPorts, err := devlbexec.ParseExecPortArgs(args[0])
 		if err != nil {

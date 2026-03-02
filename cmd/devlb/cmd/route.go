@@ -14,7 +14,13 @@ var routeCmd = &cobra.Command{
 	Use:   "route <port> <backend-port>",
 	Short: "Manually register a backend route",
 	Long:  "Register a backend for a listen port. Use --label to identify the backend.",
-	Args:  cobra.ExactArgs(2),
+	Args: cobra.ExactArgs(2),
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 0 {
+			return getListenPorts(), cobra.ShellCompDirectiveNoFileComp
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		listenPort, err := strconv.Atoi(args[0])
 		if err != nil {

@@ -44,6 +44,7 @@ type StatusEntry struct {
 	Status      string        `json:"status"`
 	ActiveConns int64         `json:"active_conns"`
 	Backends    []BackendInfo `json:"backends,omitempty"`
+	BlockedBy   string        `json:"blocked_by,omitempty"`
 }
 
 type BackendInfo struct {

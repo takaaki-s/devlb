@@ -1,11 +1,15 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 )
 
 // BackendEntry represents a registered backend for a service listener.
@@ -24,6 +28,8 @@ type ListenerInfo struct {
 	Label       string
 	Listening   bool
 	ActiveConns int64
+	Blocked     bool
+	BlockedBy   string // e.g., "PID 12345 (node)"
 }
 
 // ServiceListener manages a TCP listener for a single service.
@@ -37,6 +43,12 @@ type ServiceListener struct {
 
 	activeConns atomic.Int64
 	done        chan struct{}
+
+	blocked   bool
+	blockInfo *PortOwner
+
+	connsMu  sync.Mutex
+	connsSet map[net.Conn]struct{}
 }
 
 func NewServiceListener(name string, listenPort int) *ServiceListener {
@@ -44,6 +56,7 @@ func NewServiceListener(name string, listenPort int) *ServiceListener {
 		name:       name,
 		listenPort: listenPort,
 		done:       make(chan struct{}),
+		connsSet:   make(map[net.Conn]struct{}),
 	}
 }
 
@@ -51,12 +64,21 @@ func (sl *ServiceListener) Start() error {
 	addr := fmt.Sprintf("127.0.0.1:%d", sl.listenPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
+		if isAddrInUse(err) {
+			sl.blocked = true
+			sl.blockInfo = FindPortOwner(sl.listenPort)
+		}
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	sl.listener = ln
 
 	go sl.acceptLoop()
 	return nil
+}
+
+// IsBlocked returns true if the listener failed to start due to port conflict.
+func (sl *ServiceListener) IsBlocked() bool {
+	return sl.blocked
 }
 
 func (sl *ServiceListener) Stop() {
@@ -68,6 +90,44 @@ func (sl *ServiceListener) Stop() {
 	}
 	if sl.listener != nil {
 		sl.listener.Close()
+	}
+}
+
+// StopGraceful stops accepting new connections and waits for active connections
+// to drain, or force-closes them after timeout.
+func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
+	select {
+	case <-sl.done:
+		return
+	default:
+		close(sl.done)
+	}
+
+	if sl.listener != nil {
+		sl.listener.Close()
+	}
+
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if sl.activeConns.Load() == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			log.Printf("[%s] drain timeout, force-closing %d connections",
+				sl.name, sl.activeConns.Load())
+			sl.connsMu.Lock()
+			for conn := range sl.connsSet {
+				conn.Close()
+			}
+			sl.connsMu.Unlock()
+			return
+		case <-ticker.C:
+			continue
+		}
 	}
 }
 
@@ -193,6 +253,11 @@ func (sl *ServiceListener) Info() ListenerInfo {
 		}
 	}
 
+	blockedBy := ""
+	if sl.blocked && sl.blockInfo != nil {
+		blockedBy = fmt.Sprintf("PID %d (%s)", sl.blockInfo.PID, sl.blockInfo.Command)
+	}
+
 	return ListenerInfo{
 		Name:        sl.name,
 		ListenAddr:  sl.Addr(),
@@ -200,6 +265,8 @@ func (sl *ServiceListener) Info() ListenerInfo {
 		Label:       label,
 		Listening:   sl.listener != nil,
 		ActiveConns: sl.activeConns.Load(),
+		Blocked:     sl.blocked,
+		BlockedBy:   blockedBy,
 	}
 }
 
@@ -229,15 +296,40 @@ func (sl *ServiceListener) handleConn(client net.Conn) {
 		return
 	}
 
-	backend, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	backend, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
 	if err != nil {
-		log.Printf("[%s] backend connect failed: %v", sl.name, err)
+		log.Printf("[%s] backend :%d connect failed: %v", sl.name, port, err)
+		// RST close so client sees connection refused, not a clean close
+		if tc, ok := client.(*net.TCPConn); ok {
+			tc.SetLinger(0)
+		}
 		client.Close()
 		return
 	}
 
 	sl.activeConns.Add(1)
-	defer sl.activeConns.Add(-1)
+	sl.connsMu.Lock()
+	sl.connsSet[client] = struct{}{}
+	sl.connsSet[backend] = struct{}{}
+	sl.connsMu.Unlock()
+	defer func() {
+		sl.connsMu.Lock()
+		delete(sl.connsSet, client)
+		delete(sl.connsSet, backend)
+		sl.connsMu.Unlock()
+		sl.activeConns.Add(-1)
+	}()
 
 	Bridge(client, backend)
+}
+
+func isAddrInUse(err error) bool {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		var sysErr *os.SyscallError
+		if errors.As(opErr.Err, &sysErr) {
+			return errors.Is(sysErr.Err, syscall.EADDRINUSE)
+		}
+	}
+	return false
 }

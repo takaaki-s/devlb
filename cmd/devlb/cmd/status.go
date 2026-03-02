@@ -29,6 +29,15 @@ var statusCmd = &cobra.Command{
 		for _, e := range status.Entries {
 			listen := fmt.Sprintf(":%d", e.ListenPort)
 
+			if e.Status == "blocked" {
+				blockedInfo := e.BlockedBy
+				if blockedInfo == "" {
+					blockedInfo = "unknown"
+				}
+				fmt.Fprintf(w, "%s\t-\t-\t✗ blocked (%s)\t-\n", listen, blockedInfo)
+				continue
+			}
+
 			if len(e.Backends) > 0 {
 				for _, b := range e.Backends {
 					backend := fmt.Sprintf(":%d", b.Port)

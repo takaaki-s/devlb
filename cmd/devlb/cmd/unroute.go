@@ -11,7 +11,17 @@ import (
 var unrouteCmd = &cobra.Command{
 	Use:   "unroute <port> <backend-port>",
 	Short: "Remove a backend route",
-	Args:  cobra.ExactArgs(2),
+	Args: cobra.ExactArgs(2),
+	ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		switch len(args) {
+		case 0:
+			return getListenPorts(), cobra.ShellCompDirectiveNoFileComp
+		case 1:
+			return getBackendPorts(args[0]), cobra.ShellCompDirectiveNoFileComp
+		default:
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		listenPort, err := strconv.Atoi(args[0])
 		if err != nil {
