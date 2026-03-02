@@ -37,7 +37,7 @@ var daemonCmd = &cobra.Command{
 		}
 
 		socketPath := getSocketPath()
-		srv, err := daemon.NewServer(socketPath, cfg, sm)
+		srv, err := daemon.NewServerWithConfigPath(socketPath, cfgPath, cfg, sm)
 		if err != nil {
 			return fmt.Errorf("failed to create server: %w", err)
 		}

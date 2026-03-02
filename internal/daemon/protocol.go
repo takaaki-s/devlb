@@ -48,10 +48,16 @@ type StatusEntry struct {
 }
 
 type BackendInfo struct {
-	Port   int    `json:"port"`
-	Label  string `json:"label"`
-	Active bool   `json:"active"`
-	PID    int    `json:"pid,omitempty"`
+	Port        int    `json:"port"`
+	Label       string `json:"label"`
+	Active      bool   `json:"active"`
+	PID         int    `json:"pid,omitempty"`
+	Healthy     *bool  `json:"healthy,omitempty"`
+	LastError   string `json:"last_error,omitempty"`
+	TotalConns  int64  `json:"total_conns,omitempty"`
+	ActiveConns int64  `json:"active_conns,omitempty"`
+	BytesIn     int64  `json:"bytes_in,omitempty"`
+	BytesOut    int64  `json:"bytes_out,omitempty"`
 }
 
 type StatusResponse struct {

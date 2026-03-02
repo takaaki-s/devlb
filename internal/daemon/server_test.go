@@ -430,6 +430,119 @@ func TestServerDynamicListener(t *testing.T) {
 	}
 }
 
+// --- Phase 4: Hot reload server tests ---
+
+func setupTestServerWithConfigPath(t *testing.T) (*Server, string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	socketPath := filepath.Join(dir, "daemon.sock")
+	cfgPath := filepath.Join(dir, "devlb.yaml")
+
+	cfgData := []byte(`services:
+  - name: api
+    port: 0
+  - name: auth
+    port: 0
+`)
+	if err := os.WriteFile(cfgPath, cfgData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm, err := config.NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := NewServerWithConfigPath(socketPath, cfgPath, cfg, sm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return srv, socketPath, cfgPath
+}
+
+func TestServerHotReloadAddService(t *testing.T) {
+	srv, socketPath, cfgPath := setupTestServerWithConfigPath(t)
+	startTestServer(t, srv)
+	defer srv.Stop()
+
+	// Verify initial: 2 services
+	resp := sendRequest(t, socketPath, Request{Action: ActionStatus})
+	var sr StatusResponse
+	_ = json.Unmarshal(resp.Data, &sr)
+	if len(sr.Entries) != 2 {
+		t.Fatalf("expected 2 entries initially, got %d", len(sr.Entries))
+	}
+
+	// Add a new service via config file
+	newCfg := []byte(`services:
+  - name: api
+    port: 0
+  - name: auth
+    port: 0
+  - name: web
+    port: 0
+`)
+	if err := os.WriteFile(cfgPath, newCfg, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for watcher to detect (watcher uses 2s interval, but server creates with configPath)
+	// We call applyConfigChange directly for testing since the watcher interval in prod is 2s
+	newCfgObj, _ := config.LoadConfig(cfgPath)
+	srv.applyConfigChange(srv.config, newCfgObj)
+
+	// Verify: 3 services
+	resp2 := sendRequest(t, socketPath, Request{Action: ActionStatus})
+	var sr2 StatusResponse
+	_ = json.Unmarshal(resp2.Data, &sr2)
+	if len(sr2.Entries) != 3 {
+		t.Fatalf("expected 3 entries after add, got %d", len(sr2.Entries))
+	}
+	found := false
+	for _, e := range sr2.Entries {
+		if e.Service == "web" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("new 'web' service should appear in status")
+	}
+}
+
+func TestServerHotReloadRemoveService(t *testing.T) {
+	srv, socketPath, cfgPath := setupTestServerWithConfigPath(t)
+	startTestServer(t, srv)
+	defer srv.Stop()
+
+	// Remove auth service
+	newCfg := []byte(`services:
+  - name: api
+    port: 0
+`)
+	if err := os.WriteFile(cfgPath, newCfg, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	newCfgObj, _ := config.LoadConfig(cfgPath)
+	srv.applyConfigChange(srv.config, newCfgObj)
+
+	// Verify: 1 service
+	resp := sendRequest(t, socketPath, Request{Action: ActionStatus})
+	var sr StatusResponse
+	_ = json.Unmarshal(resp.Data, &sr)
+	if len(sr.Entries) != 1 {
+		t.Fatalf("expected 1 entry after removal, got %d", len(sr.Entries))
+	}
+	if sr.Entries[0].Service != "api" {
+		t.Errorf("remaining service should be 'api', got %q", sr.Entries[0].Service)
+	}
+}
+
 // Verify proxy actually works end-to-end via the daemon
 func TestServerRouteE2E(t *testing.T) {
 	srv, socketPath := setupTestServer(t)

@@ -18,19 +18,26 @@ import (
 const DefaultDrainTimeout = 10 * time.Second
 
 type Server struct {
-	socketPath string
-	config     *config.Config
-	state      *config.StateManager
-	listeners  map[string]*proxy.ServiceListener // Phase 1: by service name
-	portMap    map[int]*proxy.ServiceListener    // Phase 2: by listen port
-	mu         sync.Mutex                        // protects portMap for dynamic listeners
-	listener   net.Listener
-	done       chan struct{}
+	socketPath    string
+	configPath    string
+	config        *config.Config
+	state         *config.StateManager
+	listeners     map[string]*proxy.ServiceListener // Phase 1: by service name
+	portMap       map[int]*proxy.ServiceListener    // Phase 2: by listen port
+	mu            sync.Mutex                        // protects portMap for dynamic listeners
+	listener      net.Listener
+	done          chan struct{}
+	configWatcher *config.ConfigWatcher
 }
 
 func NewServer(socketPath string, cfg *config.Config, state *config.StateManager) (*Server, error) {
+	return NewServerWithConfigPath(socketPath, "", cfg, state)
+}
+
+func NewServerWithConfigPath(socketPath, configPath string, cfg *config.Config, state *config.StateManager) (*Server, error) {
 	s := &Server{
 		socketPath: socketPath,
+		configPath: configPath,
 		config:     cfg,
 		state:      state,
 		listeners:  make(map[string]*proxy.ServiceListener),
@@ -41,6 +48,9 @@ func NewServer(socketPath string, cfg *config.Config, state *config.StateManager
 	// Create a ServiceListener for each configured service
 	for _, svc := range cfg.Services {
 		sl := proxy.NewServiceListener(svc.Name, svc.Port)
+		if hcCfg := s.healthConfig(); hcCfg != nil {
+			sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
+		}
 		s.listeners[svc.Name] = sl
 		if svc.Port > 0 {
 			s.portMap[svc.Port] = sl
@@ -48,6 +58,32 @@ func NewServer(socketPath string, cfg *config.Config, state *config.StateManager
 	}
 
 	return s, nil
+}
+
+// healthConfig parses the config's health check settings into a proxy.HealthConfig.
+// Returns nil if health checks are not enabled.
+func (s *Server) healthConfig() *proxy.HealthConfig {
+	if s.config.HealthCheck == nil || !s.config.HealthCheck.Enabled {
+		return nil
+	}
+
+	cfg := proxy.DefaultHealthConfig()
+
+	if s.config.HealthCheck.Interval != "" {
+		if d, err := time.ParseDuration(s.config.HealthCheck.Interval); err == nil {
+			cfg.Interval = d
+		}
+	}
+	if s.config.HealthCheck.Timeout != "" {
+		if d, err := time.ParseDuration(s.config.HealthCheck.Timeout); err == nil {
+			cfg.Timeout = d
+		}
+	}
+	if s.config.HealthCheck.UnhealthyAfter > 0 {
+		cfg.UnhealthyAfter = s.config.HealthCheck.UnhealthyAfter
+	}
+
+	return &cfg
 }
 
 func (s *Server) Start() error {
@@ -100,6 +136,12 @@ func (s *Server) Start() error {
 	// Start periodic PID sweeper
 	s.startPIDSweeper(30 * time.Second)
 
+	// Start config watcher if config path is set
+	if s.configPath != "" {
+		s.configWatcher = config.NewConfigWatcher(s.configPath, 2*time.Second, s.applyConfigChange)
+		s.configWatcher.Start()
+	}
+
 	// Remove existing socket file
 	os.Remove(s.socketPath)
 
@@ -138,6 +180,9 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 		close(s.done)
 	}
 
+	if s.configWatcher != nil {
+		s.configWatcher.Stop()
+	}
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -411,14 +456,31 @@ func (s *Server) handleStatus() Response {
 		}
 
 		backends := ed.sl.Backends()
+		hc := ed.sl.GetHealthChecker()
+		ms := ed.sl.Metrics()
 		var backendInfos []BackendInfo
 		for _, b := range backends {
-			backendInfos = append(backendInfos, BackendInfo{
+			bi := BackendInfo{
 				Port:   b.Port,
 				Label:  b.Label,
 				Active: b.Active,
 				PID:    b.PID,
-			})
+			}
+			if hc != nil {
+				h := hc.IsHealthy(b.Port)
+				bi.Healthy = &h
+				if st := hc.Status(b.Port); st != nil && st.LastError != "" {
+					bi.LastError = st.LastError
+				}
+			}
+			if ms != nil {
+				m := ms.Get(b.Port)
+				bi.TotalConns = m.TotalConns
+				bi.ActiveConns = m.ActiveConns
+				bi.BytesIn = m.BytesIn
+				bi.BytesOut = m.BytesOut
+			}
+			backendInfos = append(backendInfos, bi)
 		}
 
 		result = append(result, StatusEntry{
@@ -466,6 +528,80 @@ func (s *Server) startPIDSweeper(interval time.Duration) {
 	}()
 }
 
+// applyConfigChange handles a config file change by adding/removing/updating service listeners.
+func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
+	diff := config.DiffConfigs(oldCfg, newCfg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, svc := range diff.Added {
+		sl := proxy.NewServiceListener(svc.Name, svc.Port)
+		if hcCfg := s.healthConfig(); hcCfg != nil {
+			sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
+		}
+		if err := sl.Start(); err != nil {
+			log.Printf("[hot-reload] failed to start %s on port %d: %v", svc.Name, svc.Port, err)
+			continue
+		}
+		s.listeners[svc.Name] = sl
+		if svc.Port > 0 {
+			s.portMap[svc.Port] = sl
+		}
+		log.Printf("[hot-reload] added service %s on port %d", svc.Name, svc.Port)
+	}
+
+	for _, svc := range diff.Removed {
+		if sl, ok := s.listeners[svc.Name]; ok {
+			// Find actual port from listener info (may differ from config if port was 0)
+			info := sl.Info()
+			var actualPort int
+			if info.ListenAddr != "" {
+				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualPort)
+			}
+			sl.StopGraceful(DefaultDrainTimeout)
+			delete(s.listeners, svc.Name)
+			if actualPort > 0 {
+				delete(s.portMap, actualPort)
+			}
+			delete(s.portMap, svc.Port)
+			log.Printf("[hot-reload] removed service %s", svc.Name)
+		}
+	}
+
+	for _, ch := range diff.Changed {
+		if sl, ok := s.listeners[ch.Name]; ok {
+			// Find actual port (may differ if config was 0)
+			info := sl.Info()
+			var actualOldPort int
+			if info.ListenAddr != "" {
+				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualOldPort)
+			}
+			// Stop the old listener
+			sl.StopGraceful(DefaultDrainTimeout)
+			if actualOldPort > 0 {
+				delete(s.portMap, actualOldPort)
+			}
+			delete(s.portMap, ch.OldPort)
+
+			// Create a new listener on the new port
+			newSL := proxy.NewServiceListener(ch.Name, ch.NewPort)
+			if hcCfg := s.healthConfig(); hcCfg != nil {
+				newSL.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
+			}
+			if err := newSL.Start(); err != nil {
+				log.Printf("[hot-reload] failed to start %s on new port %d: %v", ch.Name, ch.NewPort, err)
+				delete(s.listeners, ch.Name)
+				continue
+			}
+			s.listeners[ch.Name] = newSL
+			s.portMap[ch.NewPort] = newSL
+			log.Printf("[hot-reload] service %s port changed %d -> %d", ch.Name, ch.OldPort, ch.NewPort)
+		}
+	}
+
+	s.config = newCfg
+}
+
 // getOrCreateListener returns a listener for the given port, creating one dynamically if needed.
 func (s *Server) getOrCreateListener(port int) *proxy.ServiceListener {
 	s.mu.Lock()
@@ -490,6 +626,9 @@ func (s *Server) getOrCreateListener(port int) *proxy.ServiceListener {
 
 	// Create dynamic listener
 	sl := proxy.NewServiceListener(fmt.Sprintf("dynamic-%d", port), port)
+	if hcCfg := s.healthConfig(); hcCfg != nil {
+		sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
+	}
 	if err := sl.Start(); err != nil {
 		log.Printf("failed to start dynamic listener on port %d: %v", port, err)
 		return nil

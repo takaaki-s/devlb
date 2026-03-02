@@ -23,8 +23,14 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
+		verbose, _ := cmd.Flags().GetBool("verbose")
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "PORT\tBACKEND\tLABEL\tSTATUS\tCONNS")
+		if verbose {
+			fmt.Fprintln(w, "PORT\tBACKEND\tLABEL\tSTATUS\tCONNS\tTOTAL\tBYTES_IN\tBYTES_OUT")
+		} else {
+			fmt.Fprintln(w, "PORT\tBACKEND\tLABEL\tSTATUS\tCONNS")
+		}
 
 		for _, e := range status.Entries {
 			listen := fmt.Sprintf(":%d", e.ListenPort)
@@ -34,7 +40,11 @@ var statusCmd = &cobra.Command{
 				if blockedInfo == "" {
 					blockedInfo = "unknown"
 				}
-				fmt.Fprintf(w, "%s\t-\t-\t✗ blocked (%s)\t-\n", listen, blockedInfo)
+				if verbose {
+					fmt.Fprintf(w, "%s\t-\t-\t✗ blocked (%s)\t-\t-\t-\t-\n", listen, blockedInfo)
+				} else {
+					fmt.Fprintf(w, "%s\t-\t-\t✗ blocked (%s)\t-\n", listen, blockedInfo)
+				}
 				continue
 			}
 
@@ -51,9 +61,20 @@ var statusCmd = &cobra.Command{
 						statusIcon = "●"
 						statusText = "active"
 					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
-						listen, backend, lbl,
-						statusIcon, statusText, e.ActiveConns)
+					if b.Healthy != nil && !*b.Healthy {
+						statusIcon = "✗"
+						statusText = "unhealthy"
+					}
+					if verbose {
+						fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\t%d\t%s\t%s\n",
+							listen, backend, lbl,
+							statusIcon, statusText, b.ActiveConns,
+							b.TotalConns, formatBytes(b.BytesIn), formatBytes(b.BytesOut))
+					} else {
+						fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
+							listen, backend, lbl,
+							statusIcon, statusText, e.ActiveConns)
+					}
 				}
 			} else {
 				backend := "-"
@@ -70,9 +91,15 @@ var statusCmd = &cobra.Command{
 					statusIcon = "●"
 					statusText = "active"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
-					listen, backend, lbl,
-					statusIcon, statusText, e.ActiveConns)
+				if verbose {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\t-\t-\t-\n",
+						listen, backend, lbl,
+						statusIcon, statusText, e.ActiveConns)
+				} else {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
+						listen, backend, lbl,
+						statusIcon, statusText, e.ActiveConns)
+				}
 			}
 		}
 
@@ -80,6 +107,20 @@ var statusCmd = &cobra.Command{
 	},
 }
 
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1fG", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1fM", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1fK", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%dB", b)
+	}
+}
+
 func init() {
+	statusCmd.Flags().BoolP("verbose", "v", false, "Show detailed metrics (total conns, bytes in/out)")
 	rootCmd.AddCommand(statusCmd)
 }

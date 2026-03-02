@@ -11,8 +11,16 @@ type Service struct {
 	Port int    `yaml:"port"`
 }
 
+type HealthCheckConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	Interval       string `yaml:"interval,omitempty"`
+	Timeout        string `yaml:"timeout,omitempty"`
+	UnhealthyAfter int    `yaml:"unhealthy_after,omitempty"`
+}
+
 type Config struct {
-	Services []Service `yaml:"services"`
+	Services    []Service         `yaml:"services"`
+	HealthCheck *HealthCheckConfig `yaml:"health_check,omitempty"`
 }
 
 func LoadConfig(path string) (*Config, error) {

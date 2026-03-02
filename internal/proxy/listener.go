@@ -49,6 +49,9 @@ type ServiceListener struct {
 
 	connsMu  sync.Mutex
 	connsSet map[net.Conn]struct{}
+
+	healthChecker *HealthChecker
+	metrics       *MetricsStore
 }
 
 func NewServiceListener(name string, listenPort int) *ServiceListener {
@@ -57,7 +60,19 @@ func NewServiceListener(name string, listenPort int) *ServiceListener {
 		listenPort: listenPort,
 		done:       make(chan struct{}),
 		connsSet:   make(map[net.Conn]struct{}),
+		metrics:    NewMetricsStore(),
 	}
+}
+
+// SetHealthChecker sets the health checker for this listener.
+// Must be called before Start().
+func (sl *ServiceListener) SetHealthChecker(hc *HealthChecker) {
+	sl.healthChecker = hc
+}
+
+// HealthChecker returns the health checker, or nil if not set.
+func (sl *ServiceListener) GetHealthChecker() *HealthChecker {
+	return sl.healthChecker
 }
 
 func (sl *ServiceListener) Start() error {
@@ -71,6 +86,10 @@ func (sl *ServiceListener) Start() error {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	sl.listener = ln
+
+	if sl.healthChecker != nil {
+		sl.healthChecker.Start()
+	}
 
 	go sl.acceptLoop()
 	return nil
@@ -88,6 +107,9 @@ func (sl *ServiceListener) Stop() {
 	default:
 		close(sl.done)
 	}
+	if sl.healthChecker != nil {
+		sl.healthChecker.Stop()
+	}
 	if sl.listener != nil {
 		sl.listener.Close()
 	}
@@ -103,6 +125,9 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 		close(sl.done)
 	}
 
+	if sl.healthChecker != nil {
+		sl.healthChecker.Stop()
+	}
 	if sl.listener != nil {
 		sl.listener.Close()
 	}
@@ -166,6 +191,10 @@ func (sl *ServiceListener) AddBackend(port int, label string, pid int) {
 		Active: active,
 		PID:    pid,
 	})
+
+	if sl.healthChecker != nil {
+		sl.healthChecker.AddBackend(port)
+	}
 }
 
 // RemoveBackend removes the backend with the given port.
@@ -186,11 +215,16 @@ func (sl *ServiceListener) RemoveBackend(port int) bool {
 	}
 
 	wasActive := sl.backends[idx].Active
+	removedPort := sl.backends[idx].Port
 	sl.backends = append(sl.backends[:idx], sl.backends[idx+1:]...)
 
 	// Promote next backend if the active one was removed
 	if wasActive && len(sl.backends) > 0 {
 		sl.backends[0].Active = true
+	}
+
+	if sl.healthChecker != nil {
+		sl.healthChecker.RemoveBackend(removedPort)
 	}
 
 	return true
@@ -238,6 +272,28 @@ func (sl *ServiceListener) activePort() int {
 	return 0
 }
 
+// healthyActivePort returns the active backend's port if healthy, or the first healthy
+// standby backend's port. Returns 0 if no healthy backend is available.
+// Must be called with mu held (read lock is sufficient).
+func (sl *ServiceListener) healthyActivePort() int {
+	if sl.healthChecker == nil {
+		return sl.activePort()
+	}
+
+	active := sl.activePort()
+	if active != 0 && sl.healthChecker.IsHealthy(active) {
+		return active
+	}
+
+	// Failover: find first healthy backend
+	for _, b := range sl.backends {
+		if b.Port != active && sl.healthChecker.IsHealthy(b.Port) {
+			return b.Port
+		}
+	}
+	return 0
+}
+
 // Info returns a snapshot of the listener's current state.
 func (sl *ServiceListener) Info() ListenerInfo {
 	sl.mu.RLock()
@@ -270,6 +326,11 @@ func (sl *ServiceListener) Info() ListenerInfo {
 	}
 }
 
+// Metrics returns the metrics store for this listener.
+func (sl *ServiceListener) Metrics() *MetricsStore {
+	return sl.metrics
+}
+
 func (sl *ServiceListener) acceptLoop() {
 	for {
 		conn, err := sl.listener.Accept()
@@ -288,10 +349,11 @@ func (sl *ServiceListener) acceptLoop() {
 
 func (sl *ServiceListener) handleConn(client net.Conn) {
 	sl.mu.RLock()
-	port := sl.activePort()
+	port := sl.healthyActivePort()
 	sl.mu.RUnlock()
 
 	if port == 0 {
+		PeekAndRespond503(client, sl.name, sl.listenPort)
 		client.Close()
 		return
 	}
@@ -299,28 +361,39 @@ func (sl *ServiceListener) handleConn(client net.Conn) {
 	backend, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
 	if err != nil {
 		log.Printf("[%s] backend :%d connect failed: %v", sl.name, port, err)
-		// RST close so client sees connection refused, not a clean close
-		if tc, ok := client.(*net.TCPConn); ok {
-			tc.SetLinger(0)
+		if !PeekAndRespond503(client, sl.name, sl.listenPort) {
+			// Non-HTTP: RST close so client sees connection refused
+			if tc, ok := client.(*net.TCPConn); ok {
+				tc.SetLinger(0)
+			}
 		}
 		client.Close()
 		return
 	}
 
 	sl.activeConns.Add(1)
+	sl.metrics.RecordConnect(port)
 	sl.connsMu.Lock()
 	sl.connsSet[client] = struct{}{}
 	sl.connsSet[backend] = struct{}{}
 	sl.connsMu.Unlock()
+
+	// Wrap connections for byte counting
+	clientCC := NewCountingConn(client)
+	backendCC := NewCountingConn(backend)
+
 	defer func() {
 		sl.connsMu.Lock()
 		delete(sl.connsSet, client)
 		delete(sl.connsSet, backend)
 		sl.connsMu.Unlock()
+		sl.metrics.AddBytesIn(port, clientCC.BytesRead())
+		sl.metrics.AddBytesOut(port, backendCC.BytesRead())
+		sl.metrics.RecordDisconnect(port)
 		sl.activeConns.Add(-1)
 	}()
 
-	Bridge(client, backend)
+	Bridge(clientCC, backendCC)
 }
 
 func isAddrInUse(err error) bool {

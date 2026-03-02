@@ -558,6 +558,228 @@ func TestHandleConnBackendRecovers(t *testing.T) {
 	}
 }
 
+// --- Phase 4: Health check integration tests ---
+
+func TestHealthCheckFailoverToHealthyBackend(t *testing.T) {
+	// backend1 is dead (port allocated but not listening)
+	deadLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadPort := portFromAddr(t, deadLn.Addr().String())
+	deadLn.Close()
+
+	// backend2 is alive
+	backend2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "healthy-backend")
+	}))
+	defer backend2.Close()
+	alivePort := portFromAddr(t, backend2.Listener.Addr().String())
+
+	sl := NewServiceListener("test-svc", 0)
+	sl.SetHealthChecker(NewHealthChecker(HealthConfig{
+		Interval:       50 * time.Millisecond,
+		Timeout:        50 * time.Millisecond,
+		UnhealthyAfter: 2,
+	}))
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	// Add dead backend as active, alive backend as standby
+	sl.AddBackend(deadPort, "dead", 0)
+	sl.AddBackend(alivePort, "alive", 0)
+
+	// Wait for health checks to detect dead backend
+	time.Sleep(300 * time.Millisecond)
+
+	// Request should be routed to the healthy backend
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if string(body) != "healthy-backend" {
+		t.Errorf("expected 'healthy-backend', got %q", body)
+	}
+}
+
+func TestHealthCheckAllUnhealthyReturnsZeroPort(t *testing.T) {
+	// Both backends are dead
+	ln1, _ := net.Listen("tcp", "127.0.0.1:0")
+	port1 := portFromAddr(t, ln1.Addr().String())
+	ln1.Close()
+
+	ln2, _ := net.Listen("tcp", "127.0.0.1:0")
+	port2 := portFromAddr(t, ln2.Addr().String())
+	ln2.Close()
+
+	sl := NewServiceListener("test-svc", 0)
+	sl.SetHealthChecker(NewHealthChecker(HealthConfig{
+		Interval:       50 * time.Millisecond,
+		Timeout:        50 * time.Millisecond,
+		UnhealthyAfter: 2,
+	}))
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(port1, "dead1", 0)
+	sl.AddBackend(port2, "dead2", 0)
+
+	// Wait for health checks
+	time.Sleep(300 * time.Millisecond)
+
+	// Connection should be closed (no healthy backend)
+	conn, err := net.DialTimeout("tcp", sl.Addr(), time.Second)
+	if err != nil {
+		return // connection refused is acceptable
+	}
+	buf := make([]byte, 1)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	_, err = conn.Read(buf)
+	if err == nil {
+		t.Error("expected connection to be closed when all backends are unhealthy")
+	}
+	conn.Close()
+}
+
+// --- Phase 4: HTTP 503 integration tests ---
+
+func TestNoBackendHTTPGets503(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	// No backend set — HTTP request should get 503
+	time.Sleep(50 * time.Millisecond)
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 503 {
+		t.Errorf("expected 503, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "503") {
+		t.Errorf("expected 503 in body, got: %s", body)
+	}
+}
+
+func TestDeadBackendHTTPGets503(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	// Set backend to a port where nothing is listening
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadPort := portFromAddr(t, ln.Addr().String())
+	ln.Close()
+
+	sl.SetBackend(deadPort, "dead")
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+		Timeout:   5 * time.Second,
+	}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 503 {
+		t.Errorf("expected 503, got %d", resp.StatusCode)
+	}
+}
+
+func TestMetricsAfterProxy(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "metrics-test")
+	}))
+	defer backend.Close()
+	backendPort := portFromAddr(t, backend.Listener.Addr().String())
+
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.SetBackend(backendPort, "test")
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	// Give time for connection to close and metrics to be recorded
+	time.Sleep(100 * time.Millisecond)
+
+	m := sl.Metrics().Get(backendPort)
+	if m.TotalConns != 1 {
+		t.Errorf("TotalConns = %d, want 1", m.TotalConns)
+	}
+	if m.ActiveConns != 0 {
+		t.Errorf("ActiveConns = %d, want 0", m.ActiveConns)
+	}
+	if m.BytesIn == 0 {
+		t.Error("BytesIn should be > 0")
+	}
+	if m.BytesOut == 0 {
+		t.Error("BytesOut should be > 0")
+	}
+}
+
+func TestNoHealthCheckerUsesActivePortDirectly(t *testing.T) {
+	// Without a health checker, behavior is unchanged
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "no-hc")
+	}))
+	defer backend.Close()
+
+	sl := NewServiceListener("test-svc", 0)
+	// No SetHealthChecker call
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.SetBackend(portFromAddr(t, backend.Listener.Addr().String()), "test")
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "no-hc" {
+		t.Errorf("expected 'no-hc', got %q", body)
+	}
+}
+
 func portFromAddr(t *testing.T, addr string) int {
 	t.Helper()
 	parts := strings.Split(addr, ":")
