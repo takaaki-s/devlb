@@ -180,9 +180,15 @@ func (sl *ServiceListener) ClearBackend() {
 }
 
 // AddBackend registers a new backend. The first backend added becomes active automatically.
-func (sl *ServiceListener) AddBackend(port int, label string, pid int) {
+func (sl *ServiceListener) AddBackend(port int, label string, pid int) error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
+
+	for _, b := range sl.backends {
+		if b.Port == port {
+			return fmt.Errorf("backend :%d already registered", port)
+		}
+	}
 
 	active := len(sl.backends) == 0 // first backend is active
 	sl.backends = append(sl.backends, BackendEntry{
@@ -195,6 +201,7 @@ func (sl *ServiceListener) AddBackend(port int, label string, pid int) {
 	if sl.healthChecker != nil {
 		sl.healthChecker.AddBackend(port)
 	}
+	return nil
 }
 
 // RemoveBackend removes the backend with the given port.

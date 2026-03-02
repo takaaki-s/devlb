@@ -780,6 +780,32 @@ func TestNoHealthCheckerUsesActivePortDirectly(t *testing.T) {
 	}
 }
 
+func TestAddBackendDuplicate(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	if err := sl.AddBackend(3001, "first", 0); err != nil {
+		t.Fatalf("first AddBackend should succeed: %v", err)
+	}
+
+	// Same port should be rejected
+	err := sl.AddBackend(3001, "second", 0)
+	if err == nil {
+		t.Fatal("expected error for duplicate backend port, got nil")
+	}
+	if !strings.Contains(err.Error(), "already registered") {
+		t.Errorf("expected 'already registered' error, got: %v", err)
+	}
+
+	// Different port should succeed
+	if err := sl.AddBackend(3002, "third", 0); err != nil {
+		t.Fatalf("different port should succeed: %v", err)
+	}
+}
+
 func portFromAddr(t *testing.T, addr string) int {
 	t.Helper()
 	parts := strings.Split(addr, ":")

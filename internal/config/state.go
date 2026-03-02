@@ -142,6 +142,12 @@ func (m *StateManager) AddBackend(listenPort, backendPort int, label string, pid
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	for _, b := range m.state.Backends[listenPort] {
+		if b.BackendPort == backendPort {
+			return // already registered, skip
+		}
+	}
+
 	active := len(m.state.Backends[listenPort]) == 0
 	m.state.Backends[listenPort] = append(m.state.Backends[listenPort], &BackendEntry{
 		BackendPort: backendPort,
