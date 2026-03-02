@@ -14,7 +14,7 @@ When running multiple git worktrees for the same microservice, port conflicts ar
 
 ## Features
 
-- **Automatic port interception** — `devlb exec` uses ptrace to rewrite `bind()` syscalls, assigning a free port to each process while the proxy holds the original
+- **Automatic port interception** — `devlb exec` uses ptrace to rewrite `bind()` syscalls, assigning a free port to each process while the proxy holds the original (Linux only)
 - **Instant switching** — `devlb switch worktree-b` reroutes traffic without restarting any process
 - **Health checks** — periodic TCP probes with automatic failover to healthy backends
 - **Connection metrics** — track active connections, bytes in/out per backend
@@ -35,7 +35,7 @@ make build          # → bin/devlb
 make install        # → $GOPATH/bin/devlb
 ```
 
-Requires **Go 1.24+** and **Linux** (ptrace-based port interception is Linux-only).
+Requires **Go 1.24+**. The proxy daemon works on any platform, but `devlb exec` (ptrace-based port interception) is **Linux-only**.
 
 ## Quick Start
 
@@ -82,7 +82,7 @@ devlb tui
 | `devlb route <port> <backend> [--label NAME]` | Manually register a backend |
 | `devlb unroute <port> <backend>` | Remove a backend |
 | `devlb switch [port] <label>` | Switch active backend by label |
-| `devlb exec <port>[,...] -- <cmd> [args]` | Run command with port interception |
+| `devlb exec <port>[,...] -- <cmd> [args]` | Run command with port interception (Linux only) |
 | `devlb tui` | Interactive terminal dashboard |
 
 ## Configuration
@@ -132,7 +132,7 @@ When you run `devlb exec 3000 -- your-server`, devlb:
 4. Registers the new port as a backend with the daemon
 5. The daemon proxies `:3000 → :3001` transparently
 
-This works with any language/runtime — Go, Ruby, Node.js, Python, etc.
+This works with any language/runtime — Go, Ruby, Node.js, Python, etc. Note that `exec` requires **Linux** (ptrace is a Linux-specific API). On other platforms, use `devlb route` to register backends manually.
 
 ## Architecture
 
