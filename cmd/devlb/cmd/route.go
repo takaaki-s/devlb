@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/devlb/internal/daemon"
+	"github.com/takaaki-s/devlb/internal/label"
 )
 
 var routeLabel string
@@ -36,14 +37,12 @@ var routeCmd = &cobra.Command{
 			return fmt.Errorf("daemon not running. Start with: devlb start")
 		}
 
-		if err := client.Register(listenPort, backendPort, routeLabel, 0); err != nil {
+		lbl := label.DetectLabel(routeLabel)
+		if err := client.Register(listenPort, backendPort, lbl, 0); err != nil {
 			return err
 		}
 
-		fmt.Printf("Routed :%d → :%d", listenPort, backendPort)
-		if routeLabel != "" {
-			fmt.Printf(" [%s]", routeLabel)
-		}
+		fmt.Printf("Routed :%d → :%d [%s]", listenPort, backendPort, lbl)
 		fmt.Println()
 		return nil
 	},
