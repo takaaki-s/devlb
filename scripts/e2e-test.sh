@@ -184,7 +184,143 @@ done
 PIDS_TO_KILL=()
 echo ""
 
-# ── 6. Stop ──
+# ── 6. HTTP 503 (no backend) ──
+echo "▶ Test: HTTP 503 error page"
+# No backend is routed — should get 503 for HTTP requests
+code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$LISTEN_PORT/" 2>/dev/null || echo "000")
+assert_eq "503 when no backend" "503" "$code"
+
+body=$(curl -s "http://127.0.0.1:$LISTEN_PORT/" 2>/dev/null || echo "")
+assert_contains "503 body contains service info" "503" "$body"
+
+# Route a backend on a dead port — should also get 503
+"$DEVLB" route $LISTEN_PORT 18999 --label dead-backend >/dev/null 2>&1
+code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://127.0.0.1:$LISTEN_PORT/" 2>/dev/null || echo "000")
+assert_eq "503 when backend is dead" "503" "$code"
+
+"$DEVLB" unroute $LISTEN_PORT 18999 >/dev/null 2>&1
+echo ""
+
+# ── 7. Health check + failover ──
+echo "▶ Test: health check failover"
+
+# Stop daemon and restart with health check enabled
+"$DEVLB" stop >/dev/null 2>&1
+sleep 0.5
+
+cat > "$TMPDIR_E2E/.devlb/devlb.yaml" <<EOF
+services:
+  - name: api
+    port: $LISTEN_PORT
+  - name: auth
+    port: $LISTEN_PORT2
+health_check:
+  enabled: true
+  interval: "500ms"
+  timeout: "200ms"
+  unhealthy_after: 2
+EOF
+
+"$DEVLB" start >/dev/null 2>&1
+sleep 0.5
+
+# Start two backends
+python3 -m http.server 18930 --bind 127.0.0.1 &>/dev/null &
+B1_PID=$!
+PIDS_TO_KILL+=($B1_PID)
+python3 -m http.server 18931 --bind 127.0.0.1 &>/dev/null &
+B2_PID=$!
+PIDS_TO_KILL+=($B2_PID)
+sleep 0.5
+
+"$DEVLB" route $LISTEN_PORT 18930 --label backend-a >/dev/null 2>&1
+"$DEVLB" route $LISTEN_PORT 18931 --label backend-b >/dev/null 2>&1
+sleep 0.5
+
+# Verify both work
+assert_http "health check: initial proxy works" "http://127.0.0.1:$LISTEN_PORT/" "200"
+
+# Kill the active backend (backend-a)
+kill "$B1_PID" 2>/dev/null; wait "$B1_PID" 2>/dev/null || true
+unset 'PIDS_TO_KILL[-1]'
+unset 'PIDS_TO_KILL[-1]'
+PIDS_TO_KILL+=($B2_PID)
+
+# Wait for health check to detect failure (2 checks * 500ms + margin)
+sleep 2
+
+# Should failover to backend-b
+assert_http "health check: failover to healthy backend" "http://127.0.0.1:$LISTEN_PORT/" "200"
+
+# Status should show unhealthy
+output=$("$DEVLB" status 2>&1)
+assert_contains "health check: unhealthy shown" "unhealthy" "$output"
+
+"$DEVLB" unroute $LISTEN_PORT 18930 >/dev/null 2>&1
+"$DEVLB" unroute $LISTEN_PORT 18931 >/dev/null 2>&1
+
+kill "$B2_PID" 2>/dev/null; wait "$B2_PID" 2>/dev/null || true
+PIDS_TO_KILL=()
+echo ""
+
+# ── 8. Config hot reload ──
+echo "▶ Test: config hot reload"
+
+output=$("$DEVLB" status 2>&1)
+assert_contains "hot reload: initial has api port" ":$LISTEN_PORT" "$output"
+
+# Add a new service via config file
+cat > "$TMPDIR_E2E/.devlb/devlb.yaml" <<EOF
+services:
+  - name: api
+    port: $LISTEN_PORT
+  - name: auth
+    port: $LISTEN_PORT2
+  - name: web
+    port: 18950
+health_check:
+  enabled: true
+  interval: "500ms"
+  timeout: "200ms"
+  unhealthy_after: 2
+EOF
+
+# Wait for watcher to pick up change (2s poll interval + margin)
+sleep 3
+
+output=$("$DEVLB" status 2>&1)
+assert_contains "hot reload: new service 'web' appeared" "18950" "$output"
+
+# Remove auth service
+cat > "$TMPDIR_E2E/.devlb/devlb.yaml" <<EOF
+services:
+  - name: api
+    port: $LISTEN_PORT
+  - name: web
+    port: 18950
+health_check:
+  enabled: true
+  interval: "500ms"
+  timeout: "200ms"
+  unhealthy_after: 2
+EOF
+
+sleep 3
+
+output=$("$DEVLB" status 2>&1)
+assert_contains "hot reload: 'web' still present" "18950" "$output"
+
+# auth should be gone — check it does NOT appear
+if echo "$output" | grep -q ":$LISTEN_PORT2"; then
+    echo "  FAIL: hot reload: auth should be removed (port $LISTEN_PORT2 still present)"
+    FAIL=$((FAIL + 1))
+else
+    echo "  PASS: hot reload: auth removed"
+    PASS=$((PASS + 1))
+fi
+echo ""
+
+# ── 9. Stop ──
 echo "▶ Test: stop"
 "$DEVLB" stop >/dev/null 2>&1
 output=$("$DEVLB" status 2>&1 || true)
