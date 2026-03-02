@@ -37,7 +37,10 @@ var routeCmd = &cobra.Command{
 			return fmt.Errorf("daemon not running. Start with: devlb start")
 		}
 
-		lbl := label.DetectLabel(routeLabel)
+		lbl := routeLabel
+		if lbl == "" {
+			lbl = label.RandomLabel()
+		}
 		if err := client.Register(listenPort, backendPort, lbl, 0); err != nil {
 			return err
 		}
