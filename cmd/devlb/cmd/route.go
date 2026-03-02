@@ -11,14 +11,18 @@ import (
 var routeLabel string
 
 var routeCmd = &cobra.Command{
-	Use:   "route <service> <port>",
-	Short: "Set routing for a service",
+	Use:   "route <port> <backend-port>",
+	Short: "Manually register a backend route",
+	Long:  "Register a backend for a listen port. Use --label to identify the backend.",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		service := args[0]
-		port, err := strconv.Atoi(args[1])
+		listenPort, err := strconv.Atoi(args[0])
 		if err != nil {
-			return fmt.Errorf("invalid port: %s", args[1])
+			return fmt.Errorf("invalid listen port: %s", args[0])
+		}
+		backendPort, err := strconv.Atoi(args[1])
+		if err != nil {
+			return fmt.Errorf("invalid backend port: %s", args[1])
 		}
 
 		client := daemon.NewClient(getSocketPath())
@@ -26,11 +30,11 @@ var routeCmd = &cobra.Command{
 			return fmt.Errorf("daemon not running. Start with: devlb start")
 		}
 
-		if err := client.Route(service, port, routeLabel); err != nil {
+		if err := client.Register(listenPort, backendPort, routeLabel, 0); err != nil {
 			return err
 		}
 
-		fmt.Printf("Routed %s → :%d", service, port)
+		fmt.Printf("Routed :%d → :%d", listenPort, backendPort)
 		if routeLabel != "" {
 			fmt.Printf(" [%s]", routeLabel)
 		}

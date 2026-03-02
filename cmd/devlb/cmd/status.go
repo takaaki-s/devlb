@@ -24,30 +24,47 @@ var statusCmd = &cobra.Command{
 		}
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "SERVICE\tLISTEN\tBACKEND\tLABEL\tSTATUS\tCONNS")
+		fmt.Fprintln(w, "PORT\tBACKEND\tLABEL\tSTATUS\tCONNS")
 
 		for _, e := range status.Entries {
 			listen := fmt.Sprintf(":%d", e.ListenPort)
-			backend := "-"
-			if e.BackendPort > 0 {
-				backend = fmt.Sprintf(":%d", e.BackendPort)
-			}
-			label := e.Label
-			if label == "" {
-				label = "-"
-			}
 
-			statusIcon := "○"
-			switch e.Status {
-			case "active":
-				statusIcon = "●"
-			case "blocked":
-				statusIcon = "✗"
+			if len(e.Backends) > 0 {
+				for _, b := range e.Backends {
+					backend := fmt.Sprintf(":%d", b.Port)
+					lbl := b.Label
+					if lbl == "" {
+						lbl = "-"
+					}
+					statusIcon := "○"
+					statusText := "standby"
+					if b.Active {
+						statusIcon = "●"
+						statusText = "active"
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
+						listen, backend, lbl,
+						statusIcon, statusText, e.ActiveConns)
+				}
+			} else {
+				backend := "-"
+				if e.BackendPort > 0 {
+					backend = fmt.Sprintf(":%d", e.BackendPort)
+				}
+				lbl := e.Label
+				if lbl == "" {
+					lbl = "-"
+				}
+				statusIcon := "○"
+				statusText := "idle"
+				if e.BackendPort > 0 {
+					statusIcon = "●"
+					statusText = "active"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s %s\t%d\n",
+					listen, backend, lbl,
+					statusIcon, statusText, e.ActiveConns)
 			}
-
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s %s\t%d\n",
-				e.Service, listen, backend, label,
-				statusIcon, e.Status, e.ActiveConns)
 		}
 
 		return w.Flush()

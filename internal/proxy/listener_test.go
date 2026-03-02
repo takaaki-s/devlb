@@ -190,6 +190,165 @@ func TestServiceListenerInfo(t *testing.T) {
 	}
 }
 
+// --- Phase 2: Multi-backend tests ---
+
+func TestAddMultipleBackends(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(3001, "worktree-a", 0)
+	sl.AddBackend(3002, "worktree-b", 0)
+
+	backends := sl.Backends()
+	if len(backends) != 2 {
+		t.Fatalf("expected 2 backends, got %d", len(backends))
+	}
+	// First added should be active
+	if !backends[0].Active {
+		t.Error("first backend should be active")
+	}
+	if backends[1].Active {
+		t.Error("second backend should not be active")
+	}
+}
+
+func TestOnlyActiveReceivesConnections(t *testing.T) {
+	backend1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "backend-a")
+	}))
+	defer backend1.Close()
+
+	backend2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "backend-b")
+	}))
+	defer backend2.Close()
+
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0)
+	sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0)
+	time.Sleep(50 * time.Millisecond)
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if string(body) != "backend-a" {
+		t.Errorf("expected 'backend-a', got %q", body)
+	}
+}
+
+func TestSwitchBackendByLabel(t *testing.T) {
+	backend1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "backend-a")
+	}))
+	defer backend1.Close()
+
+	backend2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "backend-b")
+	}))
+	defer backend2.Close()
+
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0)
+	sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0)
+	time.Sleep(50 * time.Millisecond)
+
+	// Switch to "b"
+	if err := sl.SwitchBackend("b"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	resp, err := client.Get("http://" + sl.Addr())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if string(body) != "backend-b" {
+		t.Errorf("expected 'backend-b', got %q", body)
+	}
+}
+
+func TestRemoveBackend(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(3001, "a", 0)
+	sl.AddBackend(3002, "b", 0)
+
+	removed := sl.RemoveBackend(3001)
+	if !removed {
+		t.Error("RemoveBackend should return true for existing backend")
+	}
+
+	backends := sl.Backends()
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend after removal, got %d", len(backends))
+	}
+	if backends[0].Port != 3002 {
+		t.Errorf("remaining backend should be port 3002, got %d", backends[0].Port)
+	}
+}
+
+func TestRemoveActivePromotesNext(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(3001, "a", 0)
+	sl.AddBackend(3002, "b", 0)
+
+	// Remove active backend
+	sl.RemoveBackend(3001)
+
+	backends := sl.Backends()
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if !backends[0].Active {
+		t.Error("remaining backend should be promoted to active")
+	}
+}
+
+func TestSwitchUnknownLabelError(t *testing.T) {
+	sl := NewServiceListener("test-svc", 0)
+	if err := sl.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer sl.Stop()
+
+	sl.AddBackend(3001, "a", 0)
+
+	err := sl.SwitchBackend("nonexistent")
+	if err == nil {
+		t.Error("SwitchBackend with unknown label should return error")
+	}
+}
+
 func portFromAddr(t *testing.T, addr string) int {
 	t.Helper()
 	parts := strings.Split(addr, ":")

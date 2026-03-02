@@ -13,3 +13,6 @@
 
 # Test
 coverage.out
+
+# Design docs (private)
+DESIGN.md

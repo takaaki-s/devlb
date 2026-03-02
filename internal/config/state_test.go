@@ -124,3 +124,218 @@ func TestStateFilePath(t *testing.T) {
 		t.Errorf("expected filePath=%s, got %s", expected, sm.FilePath())
 	}
 }
+
+// --- Phase 2: Multi-backend state tests ---
+
+func TestAddBackend(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "worktree-a", 12345)
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if !backends[0].Active {
+		t.Error("first backend should be active")
+	}
+	if backends[0].BackendPort != 3001 {
+		t.Errorf("expected BackendPort=3001, got %d", backends[0].BackendPort)
+	}
+	if backends[0].Label != "worktree-a" {
+		t.Errorf("expected Label=worktree-a, got %s", backends[0].Label)
+	}
+	if backends[0].PID != 12345 {
+		t.Errorf("expected PID=12345, got %d", backends[0].PID)
+	}
+}
+
+func TestAddMultipleBackends(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(3000, 3002, "b", 0)
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 2 {
+		t.Fatalf("expected 2 backends, got %d", len(backends))
+	}
+	if !backends[0].Active {
+		t.Error("first should be active")
+	}
+	if backends[1].Active {
+		t.Error("second should be inactive")
+	}
+}
+
+func TestRemoveBackendState(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(3000, 3002, "b", 0)
+	sm.RemoveBackend(3000, 3001)
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Fatalf("expected 1 backend, got %d", len(backends))
+	}
+	if backends[0].BackendPort != 3002 {
+		t.Errorf("remaining should be port 3002, got %d", backends[0].BackendPort)
+	}
+}
+
+func TestRemoveActivePromotesState(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(3000, 3002, "b", 0)
+	sm.RemoveBackend(3000, 3001)
+
+	backends := sm.GetBackends(3000)
+	if len(backends) != 1 {
+		t.Fatal("expected 1 backend")
+	}
+	if !backends[0].Active {
+		t.Error("remaining backend should be promoted to active")
+	}
+}
+
+func TestSwitchActive(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(3000, 3002, "b", 0)
+
+	if err := sm.SwitchActive(3000, "b"); err != nil {
+		t.Fatal(err)
+	}
+
+	backends := sm.GetBackends(3000)
+	if backends[0].Active {
+		t.Error("a should now be inactive")
+	}
+	if !backends[1].Active {
+		t.Error("b should now be active")
+	}
+}
+
+func TestSwitchActiveUnknownLabel(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+
+	if err := sm.SwitchActive(3000, "nonexistent"); err == nil {
+		t.Error("SwitchActive with unknown label should return error")
+	}
+}
+
+func TestGetAllBackends(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(8995, 8996, "a", 0)
+
+	all := sm.GetAllBackends()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 listen ports, got %d", len(all))
+	}
+	if len(all[3000]) != 1 {
+		t.Error("expected 1 backend for port 3000")
+	}
+	if len(all[8995]) != 1 {
+		t.Error("expected 1 backend for port 8995")
+	}
+}
+
+func TestBackendsSaveAndLoad(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sm.AddBackend(3000, 3001, "worktree-a", 12345)
+	sm.AddBackend(3000, 3002, "worktree-b", 12346)
+
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	sm2, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backends := sm2.GetBackends(3000)
+	if len(backends) != 2 {
+		t.Fatalf("expected 2 backends after reload, got %d", len(backends))
+	}
+	if backends[0].BackendPort != 3001 {
+		t.Errorf("expected first backend port 3001, got %d", backends[0].BackendPort)
+	}
+	if backends[0].Label != "worktree-a" {
+		t.Errorf("expected first label worktree-a, got %s", backends[0].Label)
+	}
+	if !backends[0].Active {
+		t.Error("first backend should be active")
+	}
+	if backends[1].Active {
+		t.Error("second backend should be inactive")
+	}
+}
+
+func TestAllocatePort(t *testing.T) {
+	dir := t.TempDir()
+	sm, err := NewStateManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	port1, err := sm.AllocatePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port1 <= 0 {
+		t.Errorf("expected positive port, got %d", port1)
+	}
+
+	port2, err := sm.AllocatePort()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if port2 <= 0 {
+		t.Errorf("expected positive port, got %d", port2)
+	}
+	// Ports should be different (highly likely with ephemeral ports)
+	if port1 == port2 {
+		t.Logf("warning: two allocations returned same port %d (unlikely but possible)", port1)
+	}
+}

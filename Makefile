@@ -1,13 +1,16 @@
 BINARY=devlb
 BUILD_DIR=bin
 
-.PHONY: build test lint fmt clean install
+.PHONY: build test e2e lint fmt clean install
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/devlb
 
 test:
 	go test ./...
+
+e2e: build
+	DEVLB=$(BUILD_DIR)/$(BINARY) ./scripts/e2e-test.sh
 
 LINT_VERSION=v1.64.8
 lint:

@@ -146,5 +146,105 @@ func TestClientStop(t *testing.T) {
 	}
 }
 
+// --- Phase 2 client tests ---
+
+func TestClientRegister(t *testing.T) {
+	srv, client := setupClientTestServer(t)
+	defer srv.Stop()
+
+	// Get listen port from status
+	status, _ := client.Status()
+	var listenPort int
+	for _, e := range status.Entries {
+		if e.Service == "api" {
+			listenPort = e.ListenPort
+			break
+		}
+	}
+
+	if err := client.Register(listenPort, 13001, "worktree-a", 0); err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	status2, _ := client.Status()
+	found := false
+	for _, e := range status2.Entries {
+		if e.ListenPort == listenPort {
+			for _, b := range e.Backends {
+				if b.Port == 13001 && b.Label == "worktree-a" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("registered backend not found")
+	}
+}
+
+func TestClientUnregister(t *testing.T) {
+	srv, client := setupClientTestServer(t)
+	defer srv.Stop()
+
+	status, _ := client.Status()
+	var listenPort int
+	for _, e := range status.Entries {
+		if e.Service == "api" {
+			listenPort = e.ListenPort
+			break
+		}
+	}
+
+	_ = client.Register(listenPort, 13001, "a", 0)
+	if err := client.Unregister(listenPort, 13001); err != nil {
+		t.Fatalf("Unregister failed: %v", err)
+	}
+}
+
+func TestClientSwitch(t *testing.T) {
+	srv, client := setupClientTestServer(t)
+	defer srv.Stop()
+
+	status, _ := client.Status()
+	var listenPort int
+	for _, e := range status.Entries {
+		if e.Service == "api" {
+			listenPort = e.ListenPort
+			break
+		}
+	}
+
+	_ = client.Register(listenPort, 13001, "a", 0)
+	_ = client.Register(listenPort, 13002, "b", 0)
+
+	if err := client.Switch(listenPort, "b"); err != nil {
+		t.Fatalf("Switch failed: %v", err)
+	}
+
+	status2, _ := client.Status()
+	for _, e := range status2.Entries {
+		if e.ListenPort == listenPort {
+			for _, b := range e.Backends {
+				if b.Label == "b" && !b.Active {
+					t.Error("b should be active after switch")
+				}
+			}
+		}
+	}
+}
+
+func TestClientAllocate(t *testing.T) {
+	srv, client := setupClientTestServer(t)
+	defer srv.Stop()
+
+	port, err := client.Allocate(3000)
+	if err != nil {
+		t.Fatalf("Allocate failed: %v", err)
+	}
+	if port <= 0 {
+		t.Errorf("expected positive port, got %d", port)
+	}
+}
+
 // Suppress unused import warning
 var _ = json.Marshal

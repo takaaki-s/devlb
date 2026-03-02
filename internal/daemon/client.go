@@ -82,6 +82,72 @@ func (c *Client) Status() (*StatusResponse, error) {
 	return &sr, nil
 }
 
+// Phase 2 methods
+
+func (c *Client) Register(listenPort, backendPort int, label string, pid int) error {
+	data, _ := json.Marshal(RegisterRequest{
+		ListenPort:  listenPort,
+		BackendPort: backendPort,
+		Label:       label,
+		PID:         pid,
+	})
+	resp, err := c.send(Request{Action: ActionRegister, Data: data})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (c *Client) Unregister(listenPort, backendPort int) error {
+	data, _ := json.Marshal(UnregisterRequest{
+		ListenPort:  listenPort,
+		BackendPort: backendPort,
+	})
+	resp, err := c.send(Request{Action: ActionUnregister, Data: data})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (c *Client) Switch(listenPort int, label string) error {
+	data, _ := json.Marshal(SwitchRequest{
+		ListenPort: listenPort,
+		Label:      label,
+	})
+	resp, err := c.send(Request{Action: ActionSwitch, Data: data})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
+func (c *Client) Allocate(listenPort int) (int, error) {
+	data, _ := json.Marshal(AllocateRequest{ListenPort: listenPort})
+	resp, err := c.send(Request{Action: ActionAllocate, Data: data})
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Success {
+		return 0, errors.New(resp.Error)
+	}
+
+	var ar AllocateResponse
+	if err := json.Unmarshal(resp.Data, &ar); err != nil {
+		return 0, err
+	}
+	return ar.BackendPort, nil
+}
+
 func (c *Client) Stop() error {
 	resp, err := c.send(Request{Action: ActionStop})
 	if err != nil {
