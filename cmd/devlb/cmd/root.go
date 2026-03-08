@@ -9,7 +9,10 @@ import (
 	"github.com/takaaki-s/devlb/internal/daemon"
 )
 
-var debug bool
+var (
+	debug   bool
+	version = "dev"
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "devlb",
@@ -18,6 +21,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.Version = version
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
 }
 
