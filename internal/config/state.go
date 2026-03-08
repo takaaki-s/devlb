@@ -2,7 +2,7 @@ package config
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -254,8 +254,7 @@ func (m *StateManager) CleanStalePIDs() int {
 		for _, b := range backends {
 			if b.PID > 0 && !IsProcessAlive(b.PID) {
 				removed++
-				log.Printf("removing stale backend :%d→:%d (PID %d no longer exists)",
-					listenPort, b.BackendPort, b.PID)
+				slog.Info("removing stale backend", "listen_port", listenPort, "backend_port", b.BackendPort, "pid", b.PID)
 				continue
 			}
 			live = append(live, b)

@@ -3,7 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -154,8 +154,7 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 		}
 		select {
 		case <-deadline:
-			log.Printf("[%s] drain timeout, force-closing %d connections",
-				sl.name, sl.activeConns.Load())
+			slog.Warn("drain timeout, force-closing connections", "service", sl.name, "active_conns", sl.activeConns.Load())
 			sl.connsMu.Lock()
 			for conn := range sl.connsSet {
 				conn.Close()
@@ -365,7 +364,7 @@ func (sl *ServiceListener) acceptLoop() {
 			case <-sl.done:
 				return
 			default:
-				log.Printf("[%s] accept error: %v", sl.name, err)
+				slog.Error("accept error", "service", sl.name, "error", err)
 				return
 			}
 		}
@@ -386,7 +385,7 @@ func (sl *ServiceListener) handleConn(client net.Conn) {
 
 	backend, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
 	if err != nil {
-		log.Printf("[%s] backend :%d connect failed: %v", sl.name, port, err)
+		slog.Warn("backend connect failed", "service", sl.name, "backend_port", port, "error", err)
 		if !PeekAndRespond503(client, sl.name, sl.listenPort) {
 			// Non-HTTP: RST close so client sees connection refused
 			if tc, ok := client.(*net.TCPConn); ok {

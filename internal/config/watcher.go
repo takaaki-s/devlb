@@ -2,7 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -84,7 +84,7 @@ func (cw *ConfigWatcher) Start() {
 	// Load initial state
 	data, err := os.ReadFile(cw.path)
 	if err != nil {
-		log.Printf("[config-watcher] failed to read initial config: %v", err)
+		slog.Error("config watcher: failed to read initial config", "path", cw.path, "error", err)
 		return
 	}
 	cw.lastHash = sha256.Sum256(data)
@@ -130,7 +130,7 @@ func (cw *ConfigWatcher) check() {
 
 	newCfg, err := LoadConfig(cw.path)
 	if err != nil {
-		log.Printf("[config-watcher] failed to parse updated config: %v", err)
+		slog.Warn("config watcher: failed to parse updated config", "path", cw.path, "error", err)
 		return
 	}
 
@@ -138,6 +138,6 @@ func (cw *ConfigWatcher) check() {
 	cw.lastHash = hash
 	cw.lastCfg = newCfg
 
-	log.Printf("[config-watcher] config change detected")
+	slog.Info("config watcher: config change detected", "path", cw.path)
 	cw.onChange(oldCfg, newCfg)
 }

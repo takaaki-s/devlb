@@ -24,7 +24,11 @@ var startCmd = &cobra.Command{
 			return err
 		}
 
-		daemonCmd := exec.Command(exe, "daemon")
+		daemonArgs := []string{"daemon"}
+		if debug {
+			daemonArgs = append(daemonArgs, "--debug")
+		}
+		daemonCmd := exec.Command(exe, daemonArgs...)
 		daemonCmd.Env = os.Environ()
 		daemonCmd.Stdout = nil
 		daemonCmd.Stderr = nil

@@ -3,7 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -94,7 +94,7 @@ func (s *Server) Start() error {
 	// Start all service listeners
 	for name, sl := range s.listeners {
 		if err := sl.Start(); err != nil {
-			log.Printf("[%s] failed to start listener: %v", name, err)
+			slog.Error("failed to start listener", "service", name, "error", err)
 			continue
 		}
 		// Update portMap with actual port (for ephemeral port 0)
@@ -117,9 +117,9 @@ func (s *Server) Start() error {
 
 	// Clean stale PIDs before restoring Phase 2 backends
 	if n := s.state.CleanStalePIDs(); n > 0 {
-		log.Printf("cleaned %d stale backend entries", n)
+		slog.Info("cleaned stale backend entries", "count", n)
 		if err := s.state.Save(); err != nil {
-			log.Printf("failed to save cleaned state: %v", err)
+			slog.Error("failed to save cleaned state", "error", err)
 		}
 	}
 
@@ -292,7 +292,7 @@ func (s *Server) handleRoute(data json.RawMessage) Response {
 	sl.SetBackend(rr.Port, rr.Label)
 	s.state.SetRoute(rr.Service, rr.Port, rr.Label)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "route", "error", err)
 	}
 
 	return Response{Success: true}
@@ -315,7 +315,7 @@ func (s *Server) handleUnroute(data json.RawMessage) Response {
 	sl.ClearBackend()
 	s.state.DeleteRoute(ur.Service)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "unroute", "error", err)
 	}
 
 	return Response{Success: true}
@@ -338,7 +338,7 @@ func (s *Server) handleRegister(data json.RawMessage) Response {
 	}
 	s.state.AddBackend(rr.ListenPort, rr.BackendPort, rr.Label, rr.PID)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "register", "error", err)
 	}
 
 	return Response{Success: true}
@@ -361,7 +361,7 @@ func (s *Server) handleUnregister(data json.RawMessage) Response {
 	sl.RemoveBackend(ur.BackendPort)
 	s.state.RemoveBackend(ur.ListenPort, ur.BackendPort)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "unregister", "error", err)
 	}
 
 	return Response{Success: true}
@@ -387,7 +387,7 @@ func (s *Server) handleSwitch(data json.RawMessage) Response {
 			return Response{Success: false, Error: err.Error()}
 		}
 		if err := s.state.SwitchActive(sr.ListenPort, sr.Label); err != nil {
-			log.Printf("failed to switch state: %v", err)
+			slog.Warn("failed to switch state", "error", err)
 		}
 	} else {
 		// Switch all ports that have a backend with this label
@@ -400,7 +400,7 @@ func (s *Server) handleSwitch(data json.RawMessage) Response {
 	}
 
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "switch", "error", err)
 	}
 
 	return Response{Success: true}
@@ -528,14 +528,14 @@ func (s *Server) startPIDSweeper(interval time.Duration) {
 				return
 			case <-ticker.C:
 				if n := s.state.CleanStalePIDs(); n > 0 {
-					log.Printf("periodic sweep: cleaned %d stale entries", n)
+					slog.Info("periodic sweep: cleaned stale entries", "count", n)
 					// Also remove from in-memory listeners
 					s.mu.Lock()
 					for port, sl := range s.portMap {
 						for _, b := range sl.Backends() {
 							if b.PID > 0 && !config.IsProcessAlive(b.PID) {
 								sl.RemoveBackend(b.Port)
-								log.Printf("removed stale backend :%d→:%d from listener", port, b.Port)
+								slog.Info("removed stale backend from listener", "listen_port", port, "backend_port", b.Port)
 							}
 						}
 					}
@@ -559,14 +559,14 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 		}
 		if err := sl.Start(); err != nil {
-			log.Printf("[hot-reload] failed to start %s on port %d: %v", svc.Name, svc.Port, err)
+			slog.Error("hot-reload: failed to start service", "service", svc.Name, "port", svc.Port, "error", err)
 			continue
 		}
 		s.listeners[svc.Name] = sl
 		if svc.Port > 0 {
 			s.portMap[svc.Port] = sl
 		}
-		log.Printf("[hot-reload] added service %s on port %d", svc.Name, svc.Port)
+		slog.Info("hot-reload: added service", "service", svc.Name, "port", svc.Port)
 	}
 
 	for _, svc := range diff.Removed {
@@ -583,7 +583,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 				delete(s.portMap, actualPort)
 			}
 			delete(s.portMap, svc.Port)
-			log.Printf("[hot-reload] removed service %s", svc.Name)
+			slog.Info("hot-reload: removed service", "service", svc.Name)
 		}
 	}
 
@@ -608,13 +608,13 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 				newSL.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 			}
 			if err := newSL.Start(); err != nil {
-				log.Printf("[hot-reload] failed to start %s on new port %d: %v", ch.Name, ch.NewPort, err)
+				slog.Error("hot-reload: failed to start service on new port", "service", ch.Name, "port", ch.NewPort, "error", err)
 				delete(s.listeners, ch.Name)
 				continue
 			}
 			s.listeners[ch.Name] = newSL
 			s.portMap[ch.NewPort] = newSL
-			log.Printf("[hot-reload] service %s port changed %d -> %d", ch.Name, ch.OldPort, ch.NewPort)
+			slog.Info("hot-reload: service port changed", "service", ch.Name, "old_port", ch.OldPort, "new_port", ch.NewPort)
 		}
 	}
 
@@ -653,7 +653,7 @@ func (s *Server) getOrCreateListenerLocked(port int) *proxy.ServiceListener {
 		sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 	}
 	if err := sl.Start(); err != nil {
-		log.Printf("failed to start dynamic listener on port %d: %v", port, err)
+		slog.Error("failed to start dynamic listener", "port", port, "error", err)
 		return nil
 	}
 	s.portMap[port] = sl

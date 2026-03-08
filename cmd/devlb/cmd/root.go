@@ -9,10 +9,16 @@ import (
 	"github.com/takaaki-s/devlb/internal/daemon"
 )
 
+var debug bool
+
 var rootCmd = &cobra.Command{
 	Use:   "devlb",
 	Short: "Local development TCP reverse proxy",
 	Long:  `devlb is a local TCP reverse proxy for routing traffic between multiple worktrees.`,
+}
+
+func init() {
+	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
 }
 
 func Execute() {
