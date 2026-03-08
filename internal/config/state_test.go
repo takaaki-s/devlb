@@ -135,7 +135,7 @@ func TestAddBackend(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "worktree-a", 12345)
+	sm.AddBackend(3000, 3001, "worktree-a", 12345, "")
 
 	backends := sm.GetBackends(3000)
 	if len(backends) != 1 {
@@ -162,8 +162,8 @@ func TestAddMultipleBackends(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
-	sm.AddBackend(3000, 3002, "b", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
+	sm.AddBackend(3000, 3002, "b", 0, "")
 
 	backends := sm.GetBackends(3000)
 	if len(backends) != 2 {
@@ -184,8 +184,8 @@ func TestRemoveBackendState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
-	sm.AddBackend(3000, 3002, "b", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
+	sm.AddBackend(3000, 3002, "b", 0, "")
 	sm.RemoveBackend(3000, 3001)
 
 	backends := sm.GetBackends(3000)
@@ -204,8 +204,8 @@ func TestRemoveActivePromotesState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
-	sm.AddBackend(3000, 3002, "b", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
+	sm.AddBackend(3000, 3002, "b", 0, "")
 	sm.RemoveBackend(3000, 3001)
 
 	backends := sm.GetBackends(3000)
@@ -224,8 +224,8 @@ func TestSwitchActive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
-	sm.AddBackend(3000, 3002, "b", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
+	sm.AddBackend(3000, 3002, "b", 0, "")
 
 	if err := sm.SwitchActive(3000, "b"); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestSwitchActiveUnknownLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
 
 	if err := sm.SwitchActive(3000, "nonexistent"); err == nil {
 		t.Error("SwitchActive with unknown label should return error")
@@ -261,8 +261,8 @@ func TestGetAllBackends(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "a", 0)
-	sm.AddBackend(8995, 8996, "a", 0)
+	sm.AddBackend(3000, 3001, "a", 0, "")
+	sm.AddBackend(8995, 8996, "a", 0, "")
 
 	all := sm.GetAllBackends()
 	if len(all) != 2 {
@@ -283,8 +283,8 @@ func TestBackendsSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sm.AddBackend(3000, 3001, "worktree-a", 12345)
-	sm.AddBackend(3000, 3002, "worktree-b", 12346)
+	sm.AddBackend(3000, 3001, "worktree-a", 12345, "")
+	sm.AddBackend(3000, 3002, "worktree-b", 12346, "")
 
 	if err := sm.Save(); err != nil {
 		t.Fatal(err)
@@ -349,7 +349,7 @@ func TestCleanStalePIDs(t *testing.T) {
 	}
 
 	// Add a backend with a guaranteed-dead PID
-	sm.AddBackend(3000, 3001, "stale", 99999999)
+	sm.AddBackend(3000, 3001, "stale", 99999999, "")
 
 	removed := sm.CleanStalePIDs()
 	if removed != 1 {
@@ -370,7 +370,7 @@ func TestCleanStalePIDsKeepsLive(t *testing.T) {
 	}
 
 	// Add a backend with our own PID (definitely alive)
-	sm.AddBackend(3000, 3001, "live", os.Getpid())
+	sm.AddBackend(3000, 3001, "live", os.Getpid(), "")
 
 	removed := sm.CleanStalePIDs()
 	if removed != 0 {
@@ -391,7 +391,7 @@ func TestCleanStalePIDsZeroPIDKept(t *testing.T) {
 	}
 
 	// PID=0 means manual route — should NOT be cleaned
-	sm.AddBackend(3000, 3001, "manual", 0)
+	sm.AddBackend(3000, 3001, "manual", 0, "")
 
 	removed := sm.CleanStalePIDs()
 	if removed != 0 {
@@ -412,8 +412,8 @@ func TestCleanStalePIDsPromotesActive(t *testing.T) {
 	}
 
 	// First backend (active) has a dead PID, second has PID=0 (manual)
-	sm.AddBackend(3000, 3001, "stale-active", 99999999)
-	sm.AddBackend(3000, 3002, "manual", 0)
+	sm.AddBackend(3000, 3001, "stale-active", 99999999, "")
+	sm.AddBackend(3000, 3002, "manual", 0, "")
 
 	removed := sm.CleanStalePIDs()
 	if removed != 1 {

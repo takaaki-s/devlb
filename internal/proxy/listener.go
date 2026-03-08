@@ -14,10 +14,11 @@ import (
 
 // BackendEntry represents a registered backend for a service listener.
 type BackendEntry struct {
-	Port   int
-	Label  string
-	Active bool
-	PID    int
+	Port    int
+	Label   string
+	Active  bool
+	PID     int
+	LogFile string
 }
 
 // ListenerInfo holds the current state of a ServiceListener.
@@ -198,7 +199,7 @@ func (sl *ServiceListener) ClearBackend() {
 }
 
 // AddBackend registers a new backend. The first backend added becomes active automatically.
-func (sl *ServiceListener) AddBackend(port int, label string, pid int) error {
+func (sl *ServiceListener) AddBackend(port int, label string, pid int, logFile string) error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
@@ -210,10 +211,11 @@ func (sl *ServiceListener) AddBackend(port int, label string, pid int) error {
 
 	active := len(sl.backends) == 0 // first backend is active
 	sl.backends = append(sl.backends, BackendEntry{
-		Port:   port,
-		Label:  label,
-		Active: active,
-		PID:    pid,
+		Port:    port,
+		Label:   label,
+		Active:  active,
+		PID:     pid,
+		LogFile: logFile,
 	})
 
 	if sl.healthChecker != nil {

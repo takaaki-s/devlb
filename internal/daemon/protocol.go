@@ -58,6 +58,7 @@ type BackendInfo struct {
 	ActiveConns int64  `json:"active_conns,omitempty"`
 	BytesIn     int64  `json:"bytes_in,omitempty"`
 	BytesOut    int64  `json:"bytes_out,omitempty"`
+	LogFile     string `json:"log_file,omitempty"`
 }
 
 type StatusResponse struct {
@@ -71,6 +72,7 @@ type RegisterRequest struct {
 	BackendPort int    `json:"backend_port"`
 	Label       string `json:"label"`
 	PID         int    `json:"pid,omitempty"`
+	LogFile     string `json:"log_file,omitempty"`
 }
 
 type UnregisterRequest struct {

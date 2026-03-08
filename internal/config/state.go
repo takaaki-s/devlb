@@ -18,6 +18,7 @@ type BackendEntry struct {
 	Label       string `yaml:"label,omitempty"`
 	Active      bool   `yaml:"active"`
 	PID         int    `yaml:"pid,omitempty"`
+	LogFile     string `yaml:"log_file,omitempty"`
 }
 
 // RouteEntry represents a single route (Phase 1 legacy).
@@ -138,7 +139,7 @@ func (m *StateManager) GetAllRoutes() map[string]*RouteEntry {
 // --- Phase 2 multi-backend methods ---
 
 // AddBackend registers a backend for a listen port. The first backend becomes active.
-func (m *StateManager) AddBackend(listenPort, backendPort int, label string, pid int) {
+func (m *StateManager) AddBackend(listenPort, backendPort int, label string, pid int, logFile string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -154,6 +155,7 @@ func (m *StateManager) AddBackend(listenPort, backendPort int, label string, pid
 		Label:       label,
 		Active:      active,
 		PID:         pid,
+		LogFile:     logFile,
 	})
 }
 

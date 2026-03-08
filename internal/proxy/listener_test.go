@@ -199,8 +199,8 @@ func TestAddMultipleBackends(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(3001, "worktree-a", 0)
-	_ = sl.AddBackend(3002, "worktree-b", 0)
+	_ = sl.AddBackend(3001, "worktree-a", 0, "")
+	_ = sl.AddBackend(3002, "worktree-b", 0, "")
 
 	backends := sl.Backends()
 	if len(backends) != 2 {
@@ -232,8 +232,8 @@ func TestOnlyActiveReceivesConnections(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0)
-	_ = sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0)
+	_ = sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0, "")
+	_ = sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0, "")
 	time.Sleep(50 * time.Millisecond)
 
 	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
@@ -266,8 +266,8 @@ func TestSwitchBackendByLabel(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0)
-	_ = sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0)
+	_ = sl.AddBackend(portFromAddr(t, backend1.Listener.Addr().String()), "a", 0, "")
+	_ = sl.AddBackend(portFromAddr(t, backend2.Listener.Addr().String()), "b", 0, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Switch to "b"
@@ -295,8 +295,8 @@ func TestRemoveBackend(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(3001, "a", 0)
-	_ = sl.AddBackend(3002, "b", 0)
+	_ = sl.AddBackend(3001, "a", 0, "")
+	_ = sl.AddBackend(3002, "b", 0, "")
 
 	removed := sl.RemoveBackend(3001)
 	if !removed {
@@ -319,8 +319,8 @@ func TestRemoveActivePromotesNext(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(3001, "a", 0)
-	_ = sl.AddBackend(3002, "b", 0)
+	_ = sl.AddBackend(3001, "a", 0, "")
+	_ = sl.AddBackend(3002, "b", 0, "")
 
 	// Remove active backend
 	sl.RemoveBackend(3001)
@@ -341,7 +341,7 @@ func TestSwitchUnknownLabelError(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(3001, "a", 0)
+	_ = sl.AddBackend(3001, "a", 0, "")
 
 	err := sl.SwitchBackend("nonexistent")
 	if err == nil {
@@ -588,8 +588,8 @@ func TestHealthCheckFailoverToHealthyBackend(t *testing.T) {
 	defer sl.Stop()
 
 	// Add dead backend as active, alive backend as standby
-	_ = sl.AddBackend(deadPort, "dead", 0)
-	_ = sl.AddBackend(alivePort, "alive", 0)
+	_ = sl.AddBackend(deadPort, "dead", 0, "")
+	_ = sl.AddBackend(alivePort, "alive", 0, "")
 
 	// Wait for health checks to detect dead backend
 	time.Sleep(300 * time.Millisecond)
@@ -629,8 +629,8 @@ func TestHealthCheckAllUnhealthyReturnsZeroPort(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	_ = sl.AddBackend(port1, "dead1", 0)
-	_ = sl.AddBackend(port2, "dead2", 0)
+	_ = sl.AddBackend(port1, "dead1", 0, "")
+	_ = sl.AddBackend(port2, "dead2", 0, "")
 
 	// Wait for health checks
 	time.Sleep(300 * time.Millisecond)
@@ -787,12 +787,12 @@ func TestAddBackendDuplicate(t *testing.T) {
 	}
 	defer sl.Stop()
 
-	if err := sl.AddBackend(3001, "first", 0); err != nil {
+	if err := sl.AddBackend(3001, "first", 0, ""); err != nil {
 		t.Fatalf("first AddBackend should succeed: %v", err)
 	}
 
 	// Same port should be rejected
-	err := sl.AddBackend(3001, "second", 0)
+	err := sl.AddBackend(3001, "second", 0, "")
 	if err == nil {
 		t.Fatal("expected error for duplicate backend port, got nil")
 	}
@@ -801,7 +801,7 @@ func TestAddBackendDuplicate(t *testing.T) {
 	}
 
 	// Different port should succeed
-	if err := sl.AddBackend(3002, "third", 0); err != nil {
+	if err := sl.AddBackend(3002, "third", 0, ""); err != nil {
 		t.Fatalf("different port should succeed: %v", err)
 	}
 }

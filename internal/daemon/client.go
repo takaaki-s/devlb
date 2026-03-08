@@ -84,12 +84,13 @@ func (c *Client) Status() (*StatusResponse, error) {
 
 // Phase 2 methods
 
-func (c *Client) Register(listenPort, backendPort int, label string, pid int) error {
+func (c *Client) Register(listenPort, backendPort int, label string, pid int, logFile string) error {
 	data, _ := json.Marshal(RegisterRequest{
 		ListenPort:  listenPort,
 		BackendPort: backendPort,
 		Label:       label,
 		PID:         pid,
+		LogFile:     logFile,
 	})
 	resp, err := c.send(Request{Action: ActionRegister, Data: data})
 	if err != nil {

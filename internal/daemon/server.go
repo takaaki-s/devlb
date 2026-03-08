@@ -130,7 +130,7 @@ func (s *Server) Start() error {
 			continue
 		}
 		for _, b := range backends {
-			_ = sl.AddBackend(b.BackendPort, b.Label, b.PID)
+			_ = sl.AddBackend(b.BackendPort, b.Label, b.PID, b.LogFile)
 			if b.Active {
 				_ = sl.SwitchBackend(b.Label)
 			}
@@ -333,10 +333,10 @@ func (s *Server) handleRegister(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("failed to create listener for port %d", rr.ListenPort)}
 	}
 
-	if err := sl.AddBackend(rr.BackendPort, rr.Label, rr.PID); err != nil {
+	if err := sl.AddBackend(rr.BackendPort, rr.Label, rr.PID, rr.LogFile); err != nil {
 		return Response{Success: false, Error: err.Error()}
 	}
-	s.state.AddBackend(rr.ListenPort, rr.BackendPort, rr.Label, rr.PID)
+	s.state.AddBackend(rr.ListenPort, rr.BackendPort, rr.Label, rr.PID, rr.LogFile)
 	if err := s.state.Save(); err != nil {
 		slog.Warn("failed to save state", "action", "register", "error", err)
 	}
@@ -480,10 +480,11 @@ func (s *Server) handleStatus() Response {
 		var backendInfos []BackendInfo
 		for _, b := range backends {
 			bi := BackendInfo{
-				Port:   b.Port,
-				Label:  b.Label,
-				Active: b.Active,
-				PID:    b.PID,
+				Port:    b.Port,
+				Label:   b.Label,
+				Active:  b.Active,
+				PID:     b.PID,
+				LogFile: b.LogFile,
 			}
 			if hc != nil {
 				h := hc.IsHealthy(b.Port)

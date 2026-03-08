@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	"github.com/takaaki-s/devlb/internal/daemon"
@@ -47,6 +48,7 @@ Examples:
 			Label:        execLabel,
 			Command:      args[1],
 			Args:         args[2:],
+			LogDir:       filepath.Join(getConfigDir(), "logs"),
 		})
 		if err != nil {
 			return err
