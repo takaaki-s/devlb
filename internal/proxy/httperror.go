@@ -47,6 +47,6 @@ func PeekAndRespond503(conn net.Conn, serviceName string, listenPort int) bool {
 		return false
 	}
 
-	conn.Write(HTTPErrorResponse(serviceName, listenPort))
+	_, _ = conn.Write(HTTPErrorResponse(serviceName, listenPort))
 	return true
 }

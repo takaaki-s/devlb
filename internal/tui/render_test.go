@@ -134,8 +134,8 @@ func TestFlattenEntries(t *testing.T) {
 		t.Errorf("row 1: expected api:3000→3002, got %d→%d", rows[1].ListenPort, rows[1].Backend.Port)
 	}
 	// Third row: idle auth
-	if rows[2].ListenPort != 4000 || rows[2].IsIdle {
-		// idle service should have IsIdle = true
+	if rows[2].ListenPort != 4000 {
+		t.Errorf("row 2: expected ListenPort=4000, got %d", rows[2].ListenPort)
 	}
 	if !rows[2].IsIdle {
 		t.Errorf("row 2: expected idle, got IsIdle=%v", rows[2].IsIdle)

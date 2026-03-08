@@ -14,7 +14,7 @@ func TestCountingConnRead(t *testing.T) {
 
 	// Write data from server side
 	go func() {
-		server.Write([]byte("hello"))
+		_, _ = server.Write([]byte("hello"))
 		server.Close()
 	}()
 
@@ -38,7 +38,7 @@ func TestCountingConnWrite(t *testing.T) {
 	// Read from server side in background
 	go func() {
 		buf := make([]byte, 100)
-		server.Read(buf)
+		_, _ = server.Read(buf)
 		server.Close()
 	}()
 
@@ -63,17 +63,17 @@ func TestCountingConnMultipleOps(t *testing.T) {
 	cc := NewCountingConn(client)
 
 	go func() {
-		server.Write([]byte("abc"))
+		_, _ = server.Write([]byte("abc"))
 		buf := make([]byte, 100)
-		server.Read(buf)
-		server.Write([]byte("def"))
+		_, _ = server.Read(buf)
+		_, _ = server.Write([]byte("def"))
 		server.Close()
 	}()
 
 	buf := make([]byte, 10)
-	cc.Read(buf)      // read "abc" (3 bytes)
-	cc.Write([]byte("12345")) // write 5 bytes
-	cc.Read(buf)      // read "def" (3 bytes)
+	_, _ = cc.Read(buf)              // read "abc" (3 bytes)
+	_, _ = cc.Write([]byte("12345")) // write 5 bytes
+	_, _ = cc.Read(buf)              // read "def" (3 bytes)
 
 	if cc.BytesRead() != 6 {
 		t.Errorf("BytesRead = %d, want 6", cc.BytesRead())

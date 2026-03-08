@@ -390,7 +390,7 @@ func (sl *ServiceListener) handleConn(client net.Conn) {
 		if !PeekAndRespond503(client, sl.name, sl.listenPort) {
 			// Non-HTTP: RST close so client sees connection refused
 			if tc, ok := client.(*net.TCPConn); ok {
-				tc.SetLinger(0)
+				_ = tc.SetLinger(0)
 			}
 		}
 		client.Close()

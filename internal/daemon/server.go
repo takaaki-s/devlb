@@ -570,7 +570,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			info := sl.Info()
 			var actualPort int
 			if info.ListenAddr != "" {
-				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualPort)
+				_, _ = fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualPort)
 			}
 			sl.StopGraceful(DefaultDrainTimeout)
 			delete(s.listeners, svc.Name)
@@ -588,7 +588,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			info := sl.Info()
 			var actualOldPort int
 			if info.ListenAddr != "" {
-				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualOldPort)
+				_, _ = fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualOldPort)
 			}
 			// Stop the old listener
 			sl.StopGraceful(DefaultDrainTimeout)
