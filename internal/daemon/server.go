@@ -28,6 +28,7 @@ type Server struct {
 	listenerMu    sync.Mutex                        // protects listener (unix socket)
 	listener      net.Listener
 	done          chan struct{}
+	drainDone     chan struct{} // closed when StopGraceful completes
 	configWatcher *config.ConfigWatcher
 }
 
@@ -44,6 +45,7 @@ func NewServerWithConfigPath(socketPath, configPath string, cfg *config.Config, 
 		listeners:  make(map[string]*proxy.ServiceListener),
 		portMap:    make(map[int]*proxy.ServiceListener),
 		done:       make(chan struct{}),
+		drainDone:  make(chan struct{}),
 	}
 
 	// Create a ServiceListener for each configured service
@@ -162,6 +164,8 @@ func (s *Server) Start() error {
 		if err != nil {
 			select {
 			case <-s.done:
+				// Wait for StopGraceful to finish draining connections
+				<-s.drainDone
 				return nil
 			default:
 				return fmt.Errorf("accept: %w", err)
@@ -231,6 +235,7 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 
 	wg.Wait()
 	os.Remove(s.socketPath)
+	close(s.drainDone)
 }
 
 func (s *Server) handleConnection(conn net.Conn) {

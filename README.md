@@ -158,7 +158,7 @@ internal/model/       Shared data types
 
 ```bash
 make test       # unit tests
-make e2e        # end-to-end tests (32 scenarios)
+make e2e        # end-to-end tests (33 scenarios)
 make lint       # golangci-lint
 make fmt        # gofmt
 ```

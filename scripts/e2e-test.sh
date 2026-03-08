@@ -17,7 +17,7 @@ cleanup() {
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
     done
-    "$DEVLB" stop 2>/dev/null || true
+    "$DEVLB" stop >/dev/null 2>&1 || true
     rm -rf "$TMPDIR_E2E" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -320,11 +320,79 @@ else
 fi
 echo ""
 
-# ── 9. Stop ──
-echo "▶ Test: stop"
-"$DEVLB" stop >/dev/null 2>&1
+# ── 9. Graceful shutdown (drain active connections) ──
+echo "▶ Test: graceful shutdown"
+
+# Restart daemon with a clean config for this test
+"$DEVLB" stop >/dev/null 2>&1 || true
+sleep 1
+
+cat > "$TMPDIR_E2E/.devlb/devlb.yaml" <<EOF
+services:
+  - name: api
+    port: $LISTEN_PORT
+EOF
+"$DEVLB" start >/dev/null 2>&1
+sleep 1
+
+# Verify daemon is ready
 output=$("$DEVLB" status 2>&1 || true)
-assert_contains "daemon stopped" "not running" "$output"
+if ! echo "$output" | grep -q ":$LISTEN_PORT"; then
+    echo "  FAIL: graceful shutdown: daemon did not start"
+    FAIL=$((FAIL + 1))
+fi
+
+# Start a slow backend (takes 2s to respond)
+python3 -c "
+import http.server, time, sys
+class SlowHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        time.sleep(2)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'drain-ok')
+    def log_message(self, *args):
+        pass
+http.server.HTTPServer(('127.0.0.1', 18940), SlowHandler).serve_forever()
+" &
+SLOW_PID=$!
+PIDS_TO_KILL+=($SLOW_PID)
+sleep 0.5
+
+"$DEVLB" route $LISTEN_PORT 18940 --label slow-backend >/dev/null 2>&1
+sleep 0.3
+
+# Start a slow request in the background (will take ~2s)
+GRACEFUL_RESULT="$TMPDIR_E2E/graceful-result"
+curl -s --max-time 10 "http://127.0.0.1:$LISTEN_PORT/" > "$GRACEFUL_RESULT" &
+CURL_PID=$!
+sleep 0.5  # let connection establish through the proxy
+
+# Stop daemon while request is in-flight
+"$DEVLB" stop >/dev/null 2>&1 &
+STOP_PID=$!
+
+# Wait for curl to complete — should succeed if drain works
+wait "$CURL_PID" 2>/dev/null
+curl_exit=$?
+
+if [ "$curl_exit" -eq 0 ] && [ "$(cat "$GRACEFUL_RESULT")" = "drain-ok" ]; then
+    echo "  PASS: graceful drain: in-flight request completed"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: graceful drain: in-flight request failed (exit=$curl_exit, body='$(cat "$GRACEFUL_RESULT" 2>/dev/null)')"
+    FAIL=$((FAIL + 1))
+fi
+
+# Wait for stop to finish
+wait "$STOP_PID" 2>/dev/null || true
+
+# Verify daemon is stopped
+output=$("$DEVLB" status 2>&1 || true)
+assert_contains "daemon stopped after drain" "not running" "$output"
+
+kill "$SLOW_PID" 2>/dev/null; wait "$SLOW_PID" 2>/dev/null || true
+unset 'PIDS_TO_KILL[-1]'
 echo ""
 
 # ── Summary ──
