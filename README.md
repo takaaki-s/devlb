@@ -89,7 +89,9 @@ devlb tui
 | `devlb unroute <port> <backend-port>` | Remove a backend |
 | `devlb switch [port] <label>` | Switch active backend by label |
 | `devlb exec <port>[:<backend-port>][,...] -- <cmd> [args]` | Run command with port interception (Linux only) |
+| `devlb logs [label] [-f] [-n N] [--port PORT]` | Aggregated backend log viewer |
 | `devlb tui` | Interactive terminal dashboard |
+| `devlb status --json` | Machine-readable JSON status output |
 
 ## Configuration
 
