@@ -24,7 +24,8 @@ type Server struct {
 	state         *config.StateManager
 	listeners     map[string]*proxy.ServiceListener // Phase 1: by service name
 	portMap       map[int]*proxy.ServiceListener    // Phase 2: by listen port
-	mu            sync.Mutex                        // protects portMap for dynamic listeners
+	mu            sync.Mutex                        // protects listeners and portMap
+	listenerMu    sync.Mutex                        // protects listener (unix socket)
 	listener      net.Listener
 	done          chan struct{}
 	configWatcher *config.ConfigWatcher
@@ -87,6 +88,7 @@ func (s *Server) healthConfig() *proxy.HealthConfig {
 }
 
 func (s *Server) Start() error {
+	s.mu.Lock()
 	// Start all service listeners
 	for name, sl := range s.listeners {
 		if err := sl.Start(); err != nil {
@@ -121,7 +123,7 @@ func (s *Server) Start() error {
 
 	// Restore backends from state (Phase 2)
 	for listenPort, backends := range s.state.GetAllBackends() {
-		sl := s.getOrCreateListener(listenPort)
+		sl := s.getOrCreateListenerLocked(listenPort)
 		if sl == nil {
 			continue
 		}
@@ -132,6 +134,7 @@ func (s *Server) Start() error {
 			}
 		}
 	}
+	s.mu.Unlock()
 
 	// Start periodic PID sweeper
 	s.startPIDSweeper(30 * time.Second)
@@ -149,7 +152,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.socketPath, err)
 	}
+	s.listenerMu.Lock()
 	s.listener = ln
+	s.listenerMu.Unlock()
 
 	// Accept connections
 	for {
@@ -183,14 +188,18 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 	if s.configWatcher != nil {
 		s.configWatcher.Stop()
 	}
-	if s.listener != nil {
-		s.listener.Close()
+	s.listenerMu.Lock()
+	ln := s.listener
+	s.listenerMu.Unlock()
+	if ln != nil {
+		ln.Close()
 	}
 
 	// Drain all listeners in parallel
 	var wg sync.WaitGroup
 	stopped := make(map[*proxy.ServiceListener]bool)
 
+	s.mu.Lock()
 	for _, sl := range s.listeners {
 		stopped[sl] = true
 		wg.Add(1)
@@ -204,7 +213,6 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 		}(sl)
 	}
 
-	s.mu.Lock()
 	for _, sl := range s.portMap {
 		if !stopped[sl] {
 			stopped[sl] = true
@@ -269,7 +277,9 @@ func (s *Server) handleRoute(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("invalid route request: %v", err)}
 	}
 
+	s.mu.Lock()
 	sl, ok := s.listeners[rr.Service]
+	s.mu.Unlock()
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("unknown service: %s", rr.Service)}
 	}
@@ -290,7 +300,9 @@ func (s *Server) handleUnroute(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("invalid unroute request: %v", err)}
 	}
 
+	s.mu.Lock()
 	sl, ok := s.listeners[ur.Service]
+	s.mu.Unlock()
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("unknown service: %s", ur.Service)}
 	}
@@ -608,7 +620,11 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 func (s *Server) getOrCreateListener(port int) *proxy.ServiceListener {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.getOrCreateListenerLocked(port)
+}
 
+// getOrCreateListenerLocked is like getOrCreateListener but assumes s.mu is already held.
+func (s *Server) getOrCreateListenerLocked(port int) *proxy.ServiceListener {
 	if sl, ok := s.portMap[port]; ok {
 		return sl
 	}

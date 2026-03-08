@@ -80,12 +80,16 @@ func (sl *ServiceListener) Start() error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if isAddrInUse(err) {
+			sl.mu.Lock()
 			sl.blocked = true
 			sl.blockInfo = FindPortOwner(sl.listenPort)
+			sl.mu.Unlock()
 		}
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
+	sl.mu.Lock()
 	sl.listener = ln
+	sl.mu.Unlock()
 
 	if sl.healthChecker != nil {
 		sl.healthChecker.Start()
@@ -97,6 +101,8 @@ func (sl *ServiceListener) Start() error {
 
 // IsBlocked returns true if the listener failed to start due to port conflict.
 func (sl *ServiceListener) IsBlocked() bool {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 	return sl.blocked
 }
 
@@ -110,8 +116,11 @@ func (sl *ServiceListener) Stop() {
 	if sl.healthChecker != nil {
 		sl.healthChecker.Stop()
 	}
-	if sl.listener != nil {
-		sl.listener.Close()
+	sl.mu.RLock()
+	ln := sl.listener
+	sl.mu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 }
 
@@ -128,8 +137,11 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 	if sl.healthChecker != nil {
 		sl.healthChecker.Stop()
 	}
-	if sl.listener != nil {
-		sl.listener.Close()
+	sl.mu.RLock()
+	ln := sl.listener
+	sl.mu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 
 	deadline := time.After(timeout)
@@ -157,6 +169,13 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 }
 
 func (sl *ServiceListener) Addr() string {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+	return sl.addrLocked()
+}
+
+// addrLocked returns the listen address. Caller must hold mu (read or write).
+func (sl *ServiceListener) addrLocked() string {
 	if sl.listener == nil {
 		return ""
 	}
@@ -323,7 +342,7 @@ func (sl *ServiceListener) Info() ListenerInfo {
 
 	return ListenerInfo{
 		Name:        sl.name,
-		ListenAddr:  sl.Addr(),
+		ListenAddr:  sl.addrLocked(),
 		BackendPort: port,
 		Label:       label,
 		Listening:   sl.listener != nil,
