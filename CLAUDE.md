@@ -47,7 +47,7 @@ Layer 2 (root):   cmd/devlb/cmd → config, daemon, exec, label, tui
 
 ```bash
 make build       # go build -o bin/devlb ./cmd/devlb
-make test        # go test ./...
+make test        # go test ./... (CI runs with -race)
 make e2e         # scripts/e2e-test.sh (requires built binary, Linux for ptrace tests)
 make lint        # golangci-lint v1.64.8
 make fmt         # gofmt -l -w .
