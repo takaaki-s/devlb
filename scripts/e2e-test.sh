@@ -114,7 +114,16 @@ sleep 3
 
 output=$("$DEVLB" status 2>&1)
 assert_contains "exec auto-registered" "active" "$output"
-assert_contains "label auto-detected" "main\|unknown\|detached" "$output"
+# Label is auto-detected from git branch, short SHA, or hostname — just verify a non-dash label exists on the active line
+active_line=$(echo "$output" | grep "active" | head -1)
+label_field=$(echo "$active_line" | awk '{print $3}')
+if [ -n "$label_field" ] && [ "$label_field" != "-" ]; then
+    echo "  PASS: label auto-detected ($label_field)"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL: label auto-detected (no label found on active line)"
+    FAIL=$((FAIL + 1))
+fi
 
 assert_http "exec proxy HTTP 200" "http://127.0.0.1:$LISTEN_PORT/" "200"
 
