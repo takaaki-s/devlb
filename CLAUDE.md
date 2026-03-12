@@ -36,7 +36,7 @@ Layer 2 (root):   cmd/devlb/cmd → config, daemon, exec, label, tui
 - **cmd/devlb/cmd/** -- CLI layer (Cobra). Wires packages together. No business logic.
 - **internal/daemon/** -- Unix socket server, JSON-over-socket protocol, client.
 - **internal/proxy/** -- TCP listener, health checks, metrics, HTTP 503 fallback.
-- **internal/portswap/** -- ptrace-based bind() interception. Linux-only (stub on other OS).
+- **internal/portswap/** -- ptrace-based bind() interception. Linux/amd64 only (stub on other platforms).
 - **internal/config/** -- YAML config parsing, state persistence, file watcher.
 - **internal/model/** -- Shared data types. Zero dependencies.
 - **internal/label/** -- Git branch detection and random label generation.
@@ -46,11 +46,12 @@ Layer 2 (root):   cmd/devlb/cmd → config, daemon, exec, label, tui
 ## Build & Test
 
 ```bash
-make build       # go build -o bin/devlb ./cmd/devlb
-make test        # go test ./...
-make e2e         # scripts/e2e-test.sh (requires built binary, Linux for ptrace tests)
-make lint        # golangci-lint v1.64.8
-make fmt         # gofmt -l -w .
+make build           # go build -o bin/devlb ./cmd/devlb
+make test            # go test ./... (CI runs with -race)
+make e2e             # scripts/e2e-test.sh (requires built binary, Linux for ptrace tests)
+make lint            # golangci-lint v1.64.8
+make fmt             # gofmt -l -w .
+make release-dry-run # goreleaser snapshot (local verification)
 ```
 
 Always run `make test` and `make lint` before committing.
@@ -61,7 +62,7 @@ Always run `make test` and `make lint` before committing.
 - Table-driven tests where applicable.
 - `t.TempDir()` for temp files in tests.
 - Wrap errors with `fmt.Errorf("context: %w", err)`. No panics in library code.
-- Build tags via `_linux.go` / `_stub.go` suffixes for platform-specific code.
+- Build tags via `_linux.go` / `_stub.go` suffixes for platform-specific code. portswap uses `linux && amd64`.
 - Commit messages: conventional commits (`feat:`, `fix:`, `test:`, `docs:`, `refactor:`).
 
 ## Do NOT

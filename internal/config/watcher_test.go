@@ -105,9 +105,13 @@ func TestConfigWatcherDetectsChange(t *testing.T) {
 	// Wait for initial load
 	time.Sleep(200 * time.Millisecond)
 
-	// Modify config
+	// Modify config (atomic write to avoid watcher seeing truncated file)
 	modified := []byte("services:\n  - name: api\n    port: 8080\n  - name: auth\n    port: 9090\n")
-	if err := os.WriteFile(cfgPath, modified, 0644); err != nil {
+	tmpPath := cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, modified, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmpPath, cfgPath); err != nil {
 		t.Fatal(err)
 	}
 

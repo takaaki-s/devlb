@@ -1,7 +1,7 @@
 BINARY=devlb
 BUILD_DIR=bin
 
-.PHONY: build test e2e lint fmt clean install
+.PHONY: build test e2e lint fmt clean install release-dry-run
 
 build:
 	go build -o $(BUILD_DIR)/$(BINARY) ./cmd/devlb
@@ -24,3 +24,6 @@ clean:
 
 install: build
 	cp $(BUILD_DIR)/$(BINARY) $(GOPATH)/bin/$(BINARY) 2>/dev/null || cp $(BUILD_DIR)/$(BINARY) $(HOME)/go/bin/$(BINARY)
+
+release-dry-run:
+	go run github.com/goreleaser/goreleaser/v2@latest release --snapshot --clean

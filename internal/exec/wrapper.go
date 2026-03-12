@@ -2,7 +2,9 @@ package exec
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,6 +21,7 @@ type WrapperConfig struct {
 	Label        string         // empty = auto-detect via git branch
 	Command      string
 	Args         []string
+	LogDir       string         // directory for child process log files (empty = no logging)
 }
 
 // RunWrapper orchestrates: allocate ports → register → portswap.Run → unregister.
@@ -40,9 +43,27 @@ func RunWrapper(cfg WrapperConfig) (int, error) {
 		portMap[lp] = bp
 	}
 
+	// Set up log file if LogDir is configured
+	var logFilePath string
+	var stdout io.Writer = os.Stdout
+	var stderr io.Writer = os.Stderr
+	if cfg.LogDir != "" {
+		if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
+			return 1, fmt.Errorf("create log dir: %w", err)
+		}
+		logFilePath = filepath.Join(cfg.LogDir, lbl+".log")
+		lf, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return 1, fmt.Errorf("open log file: %w", err)
+		}
+		defer lf.Close()
+		stdout = io.MultiWriter(os.Stdout, lf)
+		stderr = io.MultiWriter(os.Stderr, lf)
+	}
+
 	// Register all backends
 	for lp, bp := range portMap {
-		if err := client.Register(lp, bp, lbl, os.Getpid()); err != nil {
+		if err := client.Register(lp, bp, lbl, os.Getpid(), logFilePath); err != nil {
 			return 1, fmt.Errorf("register %d→%d: %w", lp, bp, err)
 		}
 	}
@@ -56,8 +77,8 @@ func RunWrapper(cfg WrapperConfig) (int, error) {
 		PortMap: portMap,
 		Command: cfg.Command,
 		Args:    cfg.Args,
-		Stdout:  os.Stdout,
-		Stderr:  os.Stderr,
+		Stdout:  stdout,
+		Stderr:  stderr,
 	})
 	if result.Error != nil {
 		return 1, result.Error

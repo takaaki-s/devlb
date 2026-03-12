@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,13 +19,28 @@ var daemonCmd = &cobra.Command{
 	Short:  "Run the daemon in the foreground",
 	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Set up structured logging
+		dataDir := getConfigDir()
+		logLevel := slog.LevelInfo
+		if debug {
+			logLevel = slog.LevelDebug
+		}
+		logFile, err := os.OpenFile(
+			filepath.Join(dataDir, "daemon.log"),
+			os.O_CREATE|os.O_WRONLY|os.O_APPEND,
+			0644,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to open log file: %w", err)
+		}
+		defer logFile.Close()
+		slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: logLevel})))
+
 		cfgPath := getConfigPath()
 		cfg, err := config.LoadConfig(cfgPath)
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-
-		dataDir := getConfigDir()
 		socketDir := filepath.Join(dataDir, "run")
 		if err := os.MkdirAll(socketDir, 0755); err != nil {
 			return err
@@ -53,7 +68,7 @@ var daemonCmd = &cobra.Command{
 
 		select {
 		case sig := <-sigCh:
-			log.Printf("received %s, draining connections...", sig)
+			slog.Info("received signal, draining connections", "signal", sig)
 			srv.StopGraceful(daemon.DefaultDrainTimeout)
 			return nil
 		case err := <-errCh:

@@ -41,7 +41,7 @@ var routeCmd = &cobra.Command{
 		if lbl == "" {
 			lbl = label.RandomLabel()
 		}
-		if err := client.Register(listenPort, backendPort, lbl, 0); err != nil {
+		if err := client.Register(listenPort, backendPort, lbl, 0, ""); err != nil {
 			return err
 		}
 

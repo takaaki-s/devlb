@@ -60,6 +60,12 @@ devlb exec 3000 -- go run ./cmd/api
 # 5. Run another worktree's service on the same port
 devlb exec 3000 -- go run ./cmd/api    # from worktree-b
 
+# Or specify the backend port explicitly
+devlb exec 3000:3001 -- go run ./cmd/api
+
+# Multiple ports at once
+devlb exec 3000,8995 -- go run ./cmd/server
+
 # 6. Switch traffic
 devlb switch worktree-b
 
@@ -79,11 +85,13 @@ devlb tui
 | `devlb start` | Start the daemon in the background |
 | `devlb stop` | Stop the daemon |
 | `devlb status [-v]` | Show routing table (verbose: metrics) |
-| `devlb route <port> <backend> [--label NAME]` | Manually register a backend |
-| `devlb unroute <port> <backend>` | Remove a backend |
+| `devlb route <port> <backend-port> [--label NAME]` | Manually register a backend |
+| `devlb unroute <port> <backend-port>` | Remove a backend |
 | `devlb switch [port] <label>` | Switch active backend by label |
-| `devlb exec <port>[,...] -- <cmd> [args]` | Run command with port interception (Linux only) |
+| `devlb exec <port>[:<backend-port>][,...] -- <cmd> [args]` | Run command with port interception (Linux only) |
+| `devlb logs [label] [-f] [-n N] [--port PORT]` | Aggregated backend log viewer |
 | `devlb tui` | Interactive terminal dashboard |
+| `devlb status --json` | Machine-readable JSON status output |
 
 ## Configuration
 
@@ -152,7 +160,7 @@ internal/model/       Shared data types
 
 ```bash
 make test       # unit tests
-make e2e        # end-to-end tests (32 scenarios)
+make e2e        # end-to-end tests (33 scenarios)
 make lint       # golangci-lint
 make fmt        # gofmt
 ```

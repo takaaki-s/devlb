@@ -1,0 +1,49 @@
+version: 2
+
+builds:
+  - main: ./cmd/devlb
+    binary: devlb
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/takaaki-s/devlb/cmd/devlb/cmd.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - formats: ["tar.gz"]
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+  groups:
+    - title: Features
+      regexp: '^feat'
+    - title: Bug Fixes
+      regexp: '^fix'
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: takaaki-s
+    name: devlb

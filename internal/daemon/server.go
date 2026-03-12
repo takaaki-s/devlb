@@ -3,7 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -24,9 +24,11 @@ type Server struct {
 	state         *config.StateManager
 	listeners     map[string]*proxy.ServiceListener // Phase 1: by service name
 	portMap       map[int]*proxy.ServiceListener    // Phase 2: by listen port
-	mu            sync.Mutex                        // protects portMap for dynamic listeners
+	mu            sync.Mutex                        // protects listeners and portMap
+	listenerMu    sync.Mutex                        // protects listener (unix socket)
 	listener      net.Listener
 	done          chan struct{}
+	drainDone     chan struct{} // closed when StopGraceful completes
 	configWatcher *config.ConfigWatcher
 }
 
@@ -43,6 +45,7 @@ func NewServerWithConfigPath(socketPath, configPath string, cfg *config.Config, 
 		listeners:  make(map[string]*proxy.ServiceListener),
 		portMap:    make(map[int]*proxy.ServiceListener),
 		done:       make(chan struct{}),
+		drainDone:  make(chan struct{}),
 	}
 
 	// Create a ServiceListener for each configured service
@@ -87,10 +90,11 @@ func (s *Server) healthConfig() *proxy.HealthConfig {
 }
 
 func (s *Server) Start() error {
+	s.mu.Lock()
 	// Start all service listeners
 	for name, sl := range s.listeners {
 		if err := sl.Start(); err != nil {
-			log.Printf("[%s] failed to start listener: %v", name, err)
+			slog.Error("failed to start listener", "service", name, "error", err)
 			continue
 		}
 		// Update portMap with actual port (for ephemeral port 0)
@@ -113,25 +117,26 @@ func (s *Server) Start() error {
 
 	// Clean stale PIDs before restoring Phase 2 backends
 	if n := s.state.CleanStalePIDs(); n > 0 {
-		log.Printf("cleaned %d stale backend entries", n)
+		slog.Info("cleaned stale backend entries", "count", n)
 		if err := s.state.Save(); err != nil {
-			log.Printf("failed to save cleaned state: %v", err)
+			slog.Error("failed to save cleaned state", "error", err)
 		}
 	}
 
 	// Restore backends from state (Phase 2)
 	for listenPort, backends := range s.state.GetAllBackends() {
-		sl := s.getOrCreateListener(listenPort)
+		sl := s.getOrCreateListenerLocked(listenPort)
 		if sl == nil {
 			continue
 		}
 		for _, b := range backends {
-			_ = sl.AddBackend(b.BackendPort, b.Label, b.PID)
+			_ = sl.AddBackend(b.BackendPort, b.Label, b.PID, b.LogFile)
 			if b.Active {
 				_ = sl.SwitchBackend(b.Label)
 			}
 		}
 	}
+	s.mu.Unlock()
 
 	// Start periodic PID sweeper
 	s.startPIDSweeper(30 * time.Second)
@@ -149,7 +154,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", s.socketPath, err)
 	}
+	s.listenerMu.Lock()
 	s.listener = ln
+	s.listenerMu.Unlock()
 
 	// Accept connections
 	for {
@@ -157,6 +164,8 @@ func (s *Server) Start() error {
 		if err != nil {
 			select {
 			case <-s.done:
+				// Wait for StopGraceful to finish draining connections
+				<-s.drainDone
 				return nil
 			default:
 				return fmt.Errorf("accept: %w", err)
@@ -183,14 +192,18 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 	if s.configWatcher != nil {
 		s.configWatcher.Stop()
 	}
-	if s.listener != nil {
-		s.listener.Close()
+	s.listenerMu.Lock()
+	ln := s.listener
+	s.listenerMu.Unlock()
+	if ln != nil {
+		ln.Close()
 	}
 
 	// Drain all listeners in parallel
 	var wg sync.WaitGroup
 	stopped := make(map[*proxy.ServiceListener]bool)
 
+	s.mu.Lock()
 	for _, sl := range s.listeners {
 		stopped[sl] = true
 		wg.Add(1)
@@ -204,7 +217,6 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 		}(sl)
 	}
 
-	s.mu.Lock()
 	for _, sl := range s.portMap {
 		if !stopped[sl] {
 			stopped[sl] = true
@@ -223,6 +235,7 @@ func (s *Server) StopGraceful(timeout time.Duration) {
 
 	wg.Wait()
 	os.Remove(s.socketPath)
+	close(s.drainDone)
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
@@ -269,7 +282,9 @@ func (s *Server) handleRoute(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("invalid route request: %v", err)}
 	}
 
+	s.mu.Lock()
 	sl, ok := s.listeners[rr.Service]
+	s.mu.Unlock()
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("unknown service: %s", rr.Service)}
 	}
@@ -277,7 +292,7 @@ func (s *Server) handleRoute(data json.RawMessage) Response {
 	sl.SetBackend(rr.Port, rr.Label)
 	s.state.SetRoute(rr.Service, rr.Port, rr.Label)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "route", "error", err)
 	}
 
 	return Response{Success: true}
@@ -290,7 +305,9 @@ func (s *Server) handleUnroute(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("invalid unroute request: %v", err)}
 	}
 
+	s.mu.Lock()
 	sl, ok := s.listeners[ur.Service]
+	s.mu.Unlock()
 	if !ok {
 		return Response{Success: false, Error: fmt.Sprintf("unknown service: %s", ur.Service)}
 	}
@@ -298,7 +315,7 @@ func (s *Server) handleUnroute(data json.RawMessage) Response {
 	sl.ClearBackend()
 	s.state.DeleteRoute(ur.Service)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "unroute", "error", err)
 	}
 
 	return Response{Success: true}
@@ -316,12 +333,12 @@ func (s *Server) handleRegister(data json.RawMessage) Response {
 		return Response{Success: false, Error: fmt.Sprintf("failed to create listener for port %d", rr.ListenPort)}
 	}
 
-	if err := sl.AddBackend(rr.BackendPort, rr.Label, rr.PID); err != nil {
+	if err := sl.AddBackend(rr.BackendPort, rr.Label, rr.PID, rr.LogFile); err != nil {
 		return Response{Success: false, Error: err.Error()}
 	}
-	s.state.AddBackend(rr.ListenPort, rr.BackendPort, rr.Label, rr.PID)
+	s.state.AddBackend(rr.ListenPort, rr.BackendPort, rr.Label, rr.PID, rr.LogFile)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "register", "error", err)
 	}
 
 	return Response{Success: true}
@@ -344,7 +361,7 @@ func (s *Server) handleUnregister(data json.RawMessage) Response {
 	sl.RemoveBackend(ur.BackendPort)
 	s.state.RemoveBackend(ur.ListenPort, ur.BackendPort)
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "unregister", "error", err)
 	}
 
 	return Response{Success: true}
@@ -370,7 +387,7 @@ func (s *Server) handleSwitch(data json.RawMessage) Response {
 			return Response{Success: false, Error: err.Error()}
 		}
 		if err := s.state.SwitchActive(sr.ListenPort, sr.Label); err != nil {
-			log.Printf("failed to switch state: %v", err)
+			slog.Warn("failed to switch state", "error", err)
 		}
 	} else {
 		// Switch all ports that have a backend with this label
@@ -383,7 +400,7 @@ func (s *Server) handleSwitch(data json.RawMessage) Response {
 	}
 
 	if err := s.state.Save(); err != nil {
-		log.Printf("failed to save state: %v", err)
+		slog.Warn("failed to save state", "action", "switch", "error", err)
 	}
 
 	return Response{Success: true}
@@ -463,10 +480,11 @@ func (s *Server) handleStatus() Response {
 		var backendInfos []BackendInfo
 		for _, b := range backends {
 			bi := BackendInfo{
-				Port:   b.Port,
-				Label:  b.Label,
-				Active: b.Active,
-				PID:    b.PID,
+				Port:    b.Port,
+				Label:   b.Label,
+				Active:  b.Active,
+				PID:     b.PID,
+				LogFile: b.LogFile,
 			}
 			if hc != nil {
 				h := hc.IsHealthy(b.Port)
@@ -511,14 +529,14 @@ func (s *Server) startPIDSweeper(interval time.Duration) {
 				return
 			case <-ticker.C:
 				if n := s.state.CleanStalePIDs(); n > 0 {
-					log.Printf("periodic sweep: cleaned %d stale entries", n)
+					slog.Info("periodic sweep: cleaned stale entries", "count", n)
 					// Also remove from in-memory listeners
 					s.mu.Lock()
 					for port, sl := range s.portMap {
 						for _, b := range sl.Backends() {
 							if b.PID > 0 && !config.IsProcessAlive(b.PID) {
 								sl.RemoveBackend(b.Port)
-								log.Printf("removed stale backend :%d→:%d from listener", port, b.Port)
+								slog.Info("removed stale backend from listener", "listen_port", port, "backend_port", b.Port)
 							}
 						}
 					}
@@ -542,14 +560,14 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 		}
 		if err := sl.Start(); err != nil {
-			log.Printf("[hot-reload] failed to start %s on port %d: %v", svc.Name, svc.Port, err)
+			slog.Error("hot-reload: failed to start service", "service", svc.Name, "port", svc.Port, "error", err)
 			continue
 		}
 		s.listeners[svc.Name] = sl
 		if svc.Port > 0 {
 			s.portMap[svc.Port] = sl
 		}
-		log.Printf("[hot-reload] added service %s on port %d", svc.Name, svc.Port)
+		slog.Info("hot-reload: added service", "service", svc.Name, "port", svc.Port)
 	}
 
 	for _, svc := range diff.Removed {
@@ -558,7 +576,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			info := sl.Info()
 			var actualPort int
 			if info.ListenAddr != "" {
-				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualPort)
+				_, _ = fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualPort)
 			}
 			sl.StopGraceful(DefaultDrainTimeout)
 			delete(s.listeners, svc.Name)
@@ -566,7 +584,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 				delete(s.portMap, actualPort)
 			}
 			delete(s.portMap, svc.Port)
-			log.Printf("[hot-reload] removed service %s", svc.Name)
+			slog.Info("hot-reload: removed service", "service", svc.Name)
 		}
 	}
 
@@ -576,7 +594,7 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 			info := sl.Info()
 			var actualOldPort int
 			if info.ListenAddr != "" {
-				fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualOldPort)
+				_, _ = fmt.Sscanf(info.ListenAddr, "127.0.0.1:%d", &actualOldPort)
 			}
 			// Stop the old listener
 			sl.StopGraceful(DefaultDrainTimeout)
@@ -591,13 +609,13 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 				newSL.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 			}
 			if err := newSL.Start(); err != nil {
-				log.Printf("[hot-reload] failed to start %s on new port %d: %v", ch.Name, ch.NewPort, err)
+				slog.Error("hot-reload: failed to start service on new port", "service", ch.Name, "port", ch.NewPort, "error", err)
 				delete(s.listeners, ch.Name)
 				continue
 			}
 			s.listeners[ch.Name] = newSL
 			s.portMap[ch.NewPort] = newSL
-			log.Printf("[hot-reload] service %s port changed %d -> %d", ch.Name, ch.OldPort, ch.NewPort)
+			slog.Info("hot-reload: service port changed", "service", ch.Name, "old_port", ch.OldPort, "new_port", ch.NewPort)
 		}
 	}
 
@@ -608,7 +626,11 @@ func (s *Server) applyConfigChange(oldCfg, newCfg *config.Config) {
 func (s *Server) getOrCreateListener(port int) *proxy.ServiceListener {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.getOrCreateListenerLocked(port)
+}
 
+// getOrCreateListenerLocked is like getOrCreateListener but assumes s.mu is already held.
+func (s *Server) getOrCreateListenerLocked(port int) *proxy.ServiceListener {
 	if sl, ok := s.portMap[port]; ok {
 		return sl
 	}
@@ -632,7 +654,7 @@ func (s *Server) getOrCreateListener(port int) *proxy.ServiceListener {
 		sl.SetHealthChecker(proxy.NewHealthChecker(*hcCfg))
 	}
 	if err := sl.Start(); err != nil {
-		log.Printf("failed to start dynamic listener on port %d: %v", port, err)
+		slog.Error("failed to start dynamic listener", "port", port, "error", err)
 		return nil
 	}
 	s.portMap[port] = sl

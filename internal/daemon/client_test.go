@@ -162,7 +162,7 @@ func TestClientRegister(t *testing.T) {
 		}
 	}
 
-	if err := client.Register(listenPort, 13001, "worktree-a", 0); err != nil {
+	if err := client.Register(listenPort, 13001, "worktree-a", 0, ""); err != nil {
 		t.Fatalf("Register failed: %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestClientUnregister(t *testing.T) {
 		}
 	}
 
-	_ = client.Register(listenPort, 13001, "a", 0)
+	_ = client.Register(listenPort, 13001, "a", 0, "")
 	if err := client.Unregister(listenPort, 13001); err != nil {
 		t.Fatalf("Unregister failed: %v", err)
 	}
@@ -214,8 +214,8 @@ func TestClientSwitch(t *testing.T) {
 		}
 	}
 
-	_ = client.Register(listenPort, 13001, "a", 0)
-	_ = client.Register(listenPort, 13002, "b", 0)
+	_ = client.Register(listenPort, 13001, "a", 0, "")
+	_ = client.Register(listenPort, 13002, "b", 0, "")
 
 	if err := client.Switch(listenPort, "b"); err != nil {
 		t.Fatalf("Switch failed: %v", err)

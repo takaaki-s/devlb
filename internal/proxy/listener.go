@@ -3,7 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"sync"
@@ -14,10 +14,11 @@ import (
 
 // BackendEntry represents a registered backend for a service listener.
 type BackendEntry struct {
-	Port   int
-	Label  string
-	Active bool
-	PID    int
+	Port    int
+	Label   string
+	Active  bool
+	PID     int
+	LogFile string
 }
 
 // ListenerInfo holds the current state of a ServiceListener.
@@ -80,12 +81,16 @@ func (sl *ServiceListener) Start() error {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if isAddrInUse(err) {
+			sl.mu.Lock()
 			sl.blocked = true
 			sl.blockInfo = FindPortOwner(sl.listenPort)
+			sl.mu.Unlock()
 		}
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
+	sl.mu.Lock()
 	sl.listener = ln
+	sl.mu.Unlock()
 
 	if sl.healthChecker != nil {
 		sl.healthChecker.Start()
@@ -97,6 +102,8 @@ func (sl *ServiceListener) Start() error {
 
 // IsBlocked returns true if the listener failed to start due to port conflict.
 func (sl *ServiceListener) IsBlocked() bool {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
 	return sl.blocked
 }
 
@@ -110,8 +117,11 @@ func (sl *ServiceListener) Stop() {
 	if sl.healthChecker != nil {
 		sl.healthChecker.Stop()
 	}
-	if sl.listener != nil {
-		sl.listener.Close()
+	sl.mu.RLock()
+	ln := sl.listener
+	sl.mu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 }
 
@@ -128,8 +138,11 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 	if sl.healthChecker != nil {
 		sl.healthChecker.Stop()
 	}
-	if sl.listener != nil {
-		sl.listener.Close()
+	sl.mu.RLock()
+	ln := sl.listener
+	sl.mu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 
 	deadline := time.After(timeout)
@@ -142,8 +155,7 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 		}
 		select {
 		case <-deadline:
-			log.Printf("[%s] drain timeout, force-closing %d connections",
-				sl.name, sl.activeConns.Load())
+			slog.Warn("drain timeout, force-closing connections", "service", sl.name, "active_conns", sl.activeConns.Load())
 			sl.connsMu.Lock()
 			for conn := range sl.connsSet {
 				conn.Close()
@@ -157,6 +169,13 @@ func (sl *ServiceListener) StopGraceful(timeout time.Duration) {
 }
 
 func (sl *ServiceListener) Addr() string {
+	sl.mu.RLock()
+	defer sl.mu.RUnlock()
+	return sl.addrLocked()
+}
+
+// addrLocked returns the listen address. Caller must hold mu (read or write).
+func (sl *ServiceListener) addrLocked() string {
 	if sl.listener == nil {
 		return ""
 	}
@@ -180,7 +199,7 @@ func (sl *ServiceListener) ClearBackend() {
 }
 
 // AddBackend registers a new backend. The first backend added becomes active automatically.
-func (sl *ServiceListener) AddBackend(port int, label string, pid int) error {
+func (sl *ServiceListener) AddBackend(port int, label string, pid int, logFile string) error {
 	sl.mu.Lock()
 	defer sl.mu.Unlock()
 
@@ -192,10 +211,11 @@ func (sl *ServiceListener) AddBackend(port int, label string, pid int) error {
 
 	active := len(sl.backends) == 0 // first backend is active
 	sl.backends = append(sl.backends, BackendEntry{
-		Port:   port,
-		Label:  label,
-		Active: active,
-		PID:    pid,
+		Port:    port,
+		Label:   label,
+		Active:  active,
+		PID:     pid,
+		LogFile: logFile,
 	})
 
 	if sl.healthChecker != nil {
@@ -323,7 +343,7 @@ func (sl *ServiceListener) Info() ListenerInfo {
 
 	return ListenerInfo{
 		Name:        sl.name,
-		ListenAddr:  sl.Addr(),
+		ListenAddr:  sl.addrLocked(),
 		BackendPort: port,
 		Label:       label,
 		Listening:   sl.listener != nil,
@@ -346,7 +366,7 @@ func (sl *ServiceListener) acceptLoop() {
 			case <-sl.done:
 				return
 			default:
-				log.Printf("[%s] accept error: %v", sl.name, err)
+				slog.Error("accept error", "service", sl.name, "error", err)
 				return
 			}
 		}
@@ -367,11 +387,11 @@ func (sl *ServiceListener) handleConn(client net.Conn) {
 
 	backend, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 3*time.Second)
 	if err != nil {
-		log.Printf("[%s] backend :%d connect failed: %v", sl.name, port, err)
+		slog.Warn("backend connect failed", "service", sl.name, "backend_port", port, "error", err)
 		if !PeekAndRespond503(client, sl.name, sl.listenPort) {
 			// Non-HTTP: RST close so client sees connection refused
 			if tc, ok := client.(*net.TCPConn); ok {
-				tc.SetLinger(0)
+				_ = tc.SetLinger(0)
 			}
 		}
 		client.Close()

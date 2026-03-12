@@ -35,8 +35,8 @@ func TestDetectLabel_GitRepo(t *testing.T) {
 
 	// Change to git repo dir and restore after
 	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(orig) }()
+	_ = os.Chdir(dir)
 
 	got := DetectLabel("")
 	if got != "feature-test" {
@@ -48,8 +48,8 @@ func TestDetectLabel_NotGitRepo(t *testing.T) {
 	dir := t.TempDir()
 
 	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(orig) }()
+	_ = os.Chdir(dir)
 
 	got := DetectLabel("")
 	if got == "" {
@@ -83,8 +83,8 @@ func TestDetectLabel_DetachedHead(t *testing.T) {
 	shortSHA, _ := cmd.Output()
 
 	orig, _ := os.Getwd()
-	defer os.Chdir(orig)
-	os.Chdir(dir)
+	defer func() { _ = os.Chdir(orig) }()
+	_ = os.Chdir(dir)
 
 	got := DetectLabel("")
 	expected := filepath.Base(string(shortSHA[:len(shortSHA)-1])) // trim newline

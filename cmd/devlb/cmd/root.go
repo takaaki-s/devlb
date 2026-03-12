@@ -10,11 +10,11 @@ import (
 	"github.com/takaaki-s/devlb/internal/daemon"
 )
 
-var outputFormat string
-
-func init() {
-	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text, json")
-}
+var (
+	outputFormat string
+	debug        bool
+	version      = "dev"
+)
 
 func isJSON() bool {
 	return outputFormat == "json"
@@ -41,6 +41,12 @@ var rootCmd = &cobra.Command{
 			return fmt.Errorf("invalid output format %q: must be text or json", outputFormat)
 		}
 	},
+}
+
+func init() {
+	rootCmd.Version = version
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text, json")
+	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
 }
 
 func Execute() {

@@ -73,7 +73,7 @@ func TestPeekAndRespond503_HTTP(t *testing.T) {
 
 	// Send HTTP request from client side
 	go func() {
-		client.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"))
+		_, _ = client.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"))
 	}()
 
 	result := PeekAndRespond503(server, "api", 8080)
@@ -94,7 +94,7 @@ func TestPeekAndRespond503_NonHTTP(t *testing.T) {
 	defer client.Close()
 
 	go func() {
-		client.Write([]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05})
+		_, _ = client.Write([]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05})
 	}()
 
 	result := PeekAndRespond503(server, "api", 8080)
