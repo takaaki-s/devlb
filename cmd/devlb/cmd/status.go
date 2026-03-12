@@ -23,6 +23,10 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
+		if isJSON() {
+			return printJSON(status)
+		}
+
 		verbose, _ := cmd.Flags().GetBool("verbose")
 
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)

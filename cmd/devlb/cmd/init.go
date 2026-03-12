@@ -19,6 +19,12 @@ var initCmd = &cobra.Command{
 		}
 
 		if _, err := os.Stat(path); err == nil {
+			if isJSON() {
+				return printJSON(map[string]any{
+					"config_path":    path,
+					"already_exists": true,
+				})
+			}
 			return fmt.Errorf("config file already exists: %s", path)
 		}
 
@@ -31,6 +37,12 @@ var initCmd = &cobra.Command{
 `
 		if err := os.WriteFile(path, []byte(template), 0644); err != nil {
 			return err
+		}
+
+		if isJSON() {
+			return printJSON(map[string]any{
+				"config_path": path,
+			})
 		}
 
 		fmt.Printf("Config file created: %s\n", path)

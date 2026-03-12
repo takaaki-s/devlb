@@ -15,6 +15,11 @@ var startCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := daemon.NewClient(getSocketPath())
 		if client.IsRunning() {
+			if isJSON() {
+				return printJSON(map[string]any{
+					"already_running": true,
+				})
+			}
 			fmt.Println("Daemon is already running")
 			return nil
 		}
@@ -32,6 +37,12 @@ var startCmd = &cobra.Command{
 
 		if err := daemonCmd.Start(); err != nil {
 			return fmt.Errorf("failed to start daemon: %w", err)
+		}
+
+		if isJSON() {
+			return printJSON(map[string]any{
+				"pid": daemonCmd.Process.Pid,
+			})
 		}
 
 		fmt.Printf("Daemon started (PID: %d)\n", daemonCmd.Process.Pid)

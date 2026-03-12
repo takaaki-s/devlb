@@ -45,6 +45,14 @@ var routeCmd = &cobra.Command{
 			return err
 		}
 
+		if isJSON() {
+			return printJSON(map[string]any{
+				"listen_port":  listenPort,
+				"backend_port": backendPort,
+				"label":        lbl,
+			})
+		}
+
 		fmt.Printf("Routed :%d → :%d [%s]", listenPort, backendPort, lbl)
 		fmt.Println()
 		return nil
