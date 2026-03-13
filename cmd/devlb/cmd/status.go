@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -24,14 +23,8 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
-		jsonOutput, _ := cmd.Flags().GetBool("json")
-		if jsonOutput {
-			out, err := json.MarshalIndent(status, "", "  ")
-			if err != nil {
-				return err
-			}
-			fmt.Println(string(out))
-			return nil
+		if isJSON() {
+			return printJSON(status)
 		}
 
 		verbose, _ := cmd.Flags().GetBool("verbose")
@@ -133,6 +126,5 @@ func formatBytes(b int64) string {
 
 func init() {
 	statusCmd.Flags().BoolP("verbose", "v", false, "Show detailed metrics (total conns, bytes in/out)")
-	statusCmd.Flags().Bool("json", false, "Output status as JSON")
 	rootCmd.AddCommand(statusCmd)
 }

@@ -49,6 +49,13 @@ With two arguments, switches only the specified listen port.`,
 			return err
 		}
 
+		if isJSON() {
+			return printJSON(map[string]any{
+				"listen_port": listenPort,
+				"label":       label,
+			})
+		}
+
 		if listenPort > 0 {
 			fmt.Printf("Switched :%d → %s\n", listenPort, label)
 		} else {

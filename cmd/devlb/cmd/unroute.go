@@ -41,6 +41,13 @@ var unrouteCmd = &cobra.Command{
 			return err
 		}
 
+		if isJSON() {
+			return printJSON(map[string]any{
+				"listen_port":  listenPort,
+				"backend_port": backendPort,
+			})
+		}
+
 		fmt.Printf("Unrouted :%d → :%d\n", listenPort, backendPort)
 		return nil
 	},

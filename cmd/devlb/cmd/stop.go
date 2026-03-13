@@ -14,6 +14,12 @@ var stopCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		client := daemon.NewClient(getSocketPath())
 		if !client.IsRunning() {
+			if isJSON() {
+				return printJSON(map[string]any{
+					"stopped":         false,
+					"already_stopped": true,
+				})
+			}
 			fmt.Println("Daemon is not running")
 			return nil
 		}
@@ -25,12 +31,25 @@ var stopCmd = &cobra.Command{
 		// Poll until stopped
 		for i := 0; i < 30; i++ {
 			if !client.IsRunning() {
+				if isJSON() {
+					return printJSON(map[string]any{
+						"stopped": true,
+					})
+				}
 				fmt.Println("Daemon stopped")
 				return nil
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 
+		if isJSON() {
+			if jsonErr := printJSON(map[string]any{
+				"stopped": false,
+				"error":   "daemon did not stop in time",
+			}); jsonErr != nil {
+				return jsonErr
+			}
+		}
 		return fmt.Errorf("daemon did not stop in time")
 	},
 }

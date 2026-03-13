@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,18 +11,41 @@ import (
 )
 
 var (
-	debug   bool
-	version = "dev"
+	outputFormat string
+	debug        bool
+	version      = "dev"
 )
+
+func isJSON() bool {
+	return outputFormat == "json"
+}
+
+func printJSON(v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("json marshal: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
 
 var rootCmd = &cobra.Command{
 	Use:   "devlb",
 	Short: "Local development TCP reverse proxy",
 	Long:  `devlb is a local TCP reverse proxy for routing traffic between multiple worktrees.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		switch outputFormat {
+		case "text", "json":
+			return nil
+		default:
+			return fmt.Errorf("invalid output format %q: must be text or json", outputFormat)
+		}
+	},
 }
 
 func init() {
 	rootCmd.Version = version
+	rootCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "text", "Output format: text, json")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug logging")
 }
 
