@@ -51,7 +51,8 @@ func RunWrapper(cfg WrapperConfig) (int, error) {
 		if err := os.MkdirAll(cfg.LogDir, 0755); err != nil {
 			return 1, fmt.Errorf("create log dir: %w", err)
 		}
-		logFilePath = filepath.Join(cfg.LogDir, lbl+".log")
+		safeLabel := strings.ReplaceAll(lbl, "/", "_")
+		logFilePath = filepath.Join(cfg.LogDir, safeLabel+".log")
 		lf, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
 			return 1, fmt.Errorf("open log file: %w", err)

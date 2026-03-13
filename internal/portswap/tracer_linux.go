@@ -131,11 +131,12 @@ func traceLoop(leaderPid int, portMap map[int]int) Result {
 		return Result{ExitCode: ws.ExitStatus()}
 	}
 
-	// Set options: trace syscalls + auto-trace cloned threads
+	// Set options: trace syscalls + auto-trace cloned threads + exec
 	opts := syscall.PTRACE_O_TRACESYSGOOD |
 		syscall.PTRACE_O_TRACECLONE |
 		syscall.PTRACE_O_TRACEFORK |
 		syscall.PTRACE_O_TRACEVFORK |
+		syscall.PTRACE_O_TRACEEXEC |
 		_PTRACE_O_EXITKILL
 	if err := syscall.PtraceSetOptions(leaderPid, opts); err != nil {
 		return Result{Error: fmt.Errorf("ptrace set options: %w", err)}
@@ -207,7 +208,8 @@ func traceLoop(leaderPid int, portMap map[int]int) Result {
 			event := ws.TrapCause()
 			if event == syscall.PTRACE_EVENT_CLONE ||
 				event == syscall.PTRACE_EVENT_FORK ||
-				event == syscall.PTRACE_EVENT_VFORK {
+				event == syscall.PTRACE_EVENT_VFORK ||
+				event == syscall.PTRACE_EVENT_EXEC {
 				_ = syscall.PtraceSyscall(wpid, 0)
 				continue
 			}
